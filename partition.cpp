@@ -36,7 +36,7 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#include "uncoarsen.hpp"
+#include "jet_refiner.hpp"
 #include "defs.h"
 #include "io.hpp"
 #include <limits>
@@ -50,14 +50,24 @@ part_vt partition(value_t& edge_cut,
                                   ExperimentLoggerUtil<value_t>& experiment) {
     using ref_t = jet_refiner<matrix_t, part_t>;
     using rfd_t = typename ref_t::refine_data;
+    using stat = part_stat<matrix_t, part_t>;
     rfd_t rfd;
     ref_t refiner(g, 256);
     part_vt part("cluster assignments", g.numRows());
     Kokkos::parallel_for("set initial assignments", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         part(i) = i;
     });
+    Kokkos::fence();
+    Kokkos::Timer t;
     refiner.jet_refine(g, vweights, part, 0, rfd, experiment);
+    Kokkos::fence();
+    std::cout << t.seconds() << std::endl;
     edge_cut = rfd.cut;
+    ordinal_t labels = stat::get_total_labels(part);
+    stat::relabel(part);
+    std::cout << "Total labels " << labels << std::endl;
+    double modularity = stat::modularity(g, part, labels);
+    std::cout << "Modularity: " << modularity << std::endl;
     return part;
 }
 
@@ -84,7 +94,7 @@ int main(int argc, char **argv) {
         metrics = argv[3];
     }
 
-    Kokkos::initialize();
+    Kokkos::initialize(argc, argv);
     //must scope kokkos-related data
     //so that it falls out of scope b4 finalize
     {

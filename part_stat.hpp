@@ -112,6 +112,66 @@ static gain_t get_total_cut(const matrix_t g, const part_vt partition){
     return total_cut;
 }
 
+static ordinal_t get_total_labels(const part_vt labels){
+	ordinal_t n = labels.extent(0);
+	vtx_view_t used("used labels", n);
+	Kokkos::parallel_for("find used labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		ordinal_t l = labels(i);
+		Kokkos::atomic_add(&used(l), 1);
+	});
+	ordinal_t total = 0;
+	Kokkos::parallel_reduce("find used labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update){
+		if(used(i) > 0) update++;
+	}, total);
+	return total;
+}
+
+static void relabel(part_vt labels){
+	ordinal_t n = labels.extent(0);
+	vtx_view_t used("used labels", n);
+	Kokkos::parallel_for("find used labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		ordinal_t l = labels(i);
+		Kokkos::atomic_add(&used(l), 1);
+	});
+	Kokkos::parallel_scan("count labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+		if(used(i) > 0){
+			if(final) used(i) = update;
+			update++;
+		}
+	});
+	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		labels(i) = used(labels(i));
+	});
+}
+
+static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count){
+    wgt_view_t internal("internal degree", label_count);
+    wgt_view_t total("total degree", label_count);
+    ordinal_t n = g.numRows();
+    scalar_t g_degree = 0;
+    Kokkos::parallel_reduce("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
+		scalar_t id = 0;
+        scalar_t td = 0;
+        ordinal_t l = labels(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            td += g.values(j);
+            ordinal_t v = g.graph.entries(j);
+            if(l == labels(v)) id += g.values(j);
+        }
+        Kokkos::atomic_add(&internal(l), id);
+        Kokkos::atomic_add(&total(l), td);
+        update += td;
+	}, g_degree);
+    double m = 0;
+    Kokkos::parallel_reduce("sum modularity", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, double& update){
+        double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
+        double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
+        double l_mod = internal_ratio - (total_ratio*total_ratio);
+        update += l_mod;
+    }, m);
+    return m;
+}
+
 // this is needed in a few different places so it is best to have one implementation for consistency
 static ordinal_t optimal_size(const ordinal_t total_size, const part_t k){
     //round up as per convention
