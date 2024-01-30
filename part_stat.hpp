@@ -172,6 +172,17 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
     return m;
 }
 
+static double modularity(const ordinal_t t_labels, const scalar_t g_degree, const gain_vt internal, const gain_vt total){
+    double m = 0;
+    Kokkos::parallel_reduce("sum modularity", policy_t(0, t_labels), KOKKOS_LAMBDA(const ordinal_t l, double& update){
+        double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
+        double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
+        double l_mod = internal_ratio - (total_ratio*total_ratio);
+        update += l_mod;
+    }, m);
+    return m;
+}
+
 // this is needed in a few different places so it is best to have one implementation for consistency
 static ordinal_t optimal_size(const ordinal_t total_size, const part_t k){
     //round up as per convention

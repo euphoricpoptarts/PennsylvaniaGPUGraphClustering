@@ -93,7 +93,7 @@ public:
 
 //data that is preserved between levels in the multilevel scheme
 struct refine_data {
-    gain_vt part_sizes;
+    gain_vt in_deg, total_deg;
     scalar_t total_size = 0;
     gain_t cut = 0;
     gain_t total_imb = 0;
@@ -103,6 +103,7 @@ struct refine_data {
 struct problem {
     matrix_t g;
     wgt_view_t vtx_w;
+    wgt_view_t wdeg;
     double imb;
     ordinal_t opt;
     ordinal_t size_max;
@@ -177,7 +178,8 @@ struct scratch_mem {
     }
 
 void copy_refine_data(refine_data& lhs, refine_data& rhs){
-    //Kokkos::deep_copy(exec_space(), lhs.part_sizes, rhs.part_sizes);
+    Kokkos::deep_copy(exec_space(), lhs.in_deg, rhs.in_deg);
+    Kokkos::deep_copy(exec_space(), lhs.total_deg, rhs.total_deg);
     lhs.total_size = rhs.total_size;
     lhs.cut = rhs.cut;
     lhs.total_imb = rhs.total_imb;
@@ -186,7 +188,8 @@ void copy_refine_data(refine_data& lhs, refine_data& rhs){
 
 refine_data clone_refine_data(refine_data& rhs){
     refine_data clone;
-    //clone.part_sizes = gain_vt(Kokkos::ViewAllocateWithoutInitializing("part sizes"), rhs.part_sizes.extent(0));
+    clone.in_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("internal degree of clusters"), rhs.in_deg.extent(0));
+    clone.total_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("total degree of clusters"), rhs.total_deg.extent(0));
     copy_refine_data(clone, rhs);
     return clone;
 }
@@ -519,6 +522,7 @@ static gain_t lookup(const part_t* keys, const gain_t* vals, const part_t& targe
 //4 kernels, 1 device-host syncs
 void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, const part_vt dest_part, scratch_mem& scratch, conn_data cdata, refine_data& curr_state){
     const matrix_t& g = prob.g;
+    const wgt_view_t& wdeg = prob.wdeg;
     ordinal_t total_moves = swaps.extent(0);
     //total change in cutsize = (sum over all moves) -((new_b_con - new_p_con) + (old_b_con - old_p_con))
     Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
@@ -527,8 +531,12 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part_t p = part(i);
         edge_offset_t start = cdata.conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
+        //edges of this vertex in p before moving
         gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
+        //edges of this vertex in best before moving
         gain_t b_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, best, size);
+        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con);
+        Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
         gain_update += b_con - p_con;
     }, scratch.cut_change1);
     //change part assignments and update part sizes
@@ -538,6 +546,8 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part_t best = dest_part(i);
         cdata.dest_cache(i) = NULL_PART;
         part(i) = best;
+        Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
+        Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
         //update needs to know old part assignment
         dest_part(i) = p;
     });
@@ -552,8 +562,12 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part_t best = part(i);
         edge_offset_t start = cdata.conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
+        //edges of other vertices in p connecting to this vertex after moving
         gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
+        //edges of other vertices in best connecting to this vertex after moving
         gain_t b_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, best, size);
+        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con);
+        Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
         gain_update += b_con - p_con;
     }, scratch.cut_change2);
     Kokkos::deep_copy(exec_space(), scratch.reduce_copy, scratch.reduce_locs);
@@ -727,7 +741,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
     return cdata;
 }
 
-void jet_refine(const matrix_t g, wgt_view_t vtx_w, part_vt best_part, int level, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
+void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, int level, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
     Kokkos::Timer y;
     //contains several scratch views that are reused in each iteration
     //reallocating in each iteration would be expensive (GPU memory is often slow to deallocate)
@@ -736,10 +750,14 @@ void jet_refine(const matrix_t g, wgt_view_t vtx_w, part_vt best_part, int level
     //ie. if this is the coarsest level
     if(!best_state.init){
         best_state.cut = stat::get_total_cut(g, best_part);
+        best_state.in_deg = gain_vt("internal degree of clusters", g.numRows());
+        best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
+        Kokkos::deep_copy(best_state.in_deg, 0);
+        Kokkos::deep_copy(best_state.total_deg, wdeg);
     }
     problem prob;
     prob.g = g;
-    prob.vtx_w = vtx_w;
+    prob.wdeg = wdeg;
     if(!best_state.init){
         best_state.init = true;
         std::cout << "Initial " << std::fixed << (best_state.cut / 2) << " ";
@@ -769,7 +787,7 @@ void jet_refine(const matrix_t g, wgt_view_t vtx_w, part_vt best_part, int level
         moves = jet_lp(prob, part, cdata, scratch, (level == 0));
         lab_counter++;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
-	std::cout << "Cut: " << curr_state.cut << std::endl;
+        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), g.nnz(), curr_state.in_deg, curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.cut < best_state.cut){
             //do not reset counter if cut improvement is too small
