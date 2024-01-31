@@ -183,6 +183,14 @@ static double modularity(const ordinal_t t_labels, const scalar_t g_degree, cons
     return m;
 }
 
+static int total_labels(const gain_vt total){
+    int labels = 0;
+    Kokkos::parallel_reduce("count used labels", policy_t(0, total.size()), KOKKOS_LAMBDA(const ordinal_t i, int& update){
+        if(total(i) > 0) update++;
+    }, labels);
+    return labels;
+}
+
 // this is needed in a few different places so it is best to have one implementation for consistency
 static ordinal_t optimal_size(const ordinal_t total_size, const part_t k){
     //round up as per convention
