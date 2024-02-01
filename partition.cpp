@@ -39,7 +39,7 @@
 #include "jet_refiner.hpp"
 #include "defs.h"
 #include "io.hpp"
-#include "contract"
+#include "contract.hpp"
 #include <limits>
 
 using namespace jet_partitioner;
@@ -81,11 +81,16 @@ part_vt partition(value_t& edge_cut,
     Kokkos::parallel_for("set initial assignments", r_policy(0, labels), KOKKOS_LAMBDA(const ordinal_t i){
         part2(i) = i;
     });
-    refiner.jet_refine(c2.mtx, rfd.total_deg, c2.nb_self_loops, part2, 1, rfd, experiment);
+    wgt_view_t wdeg2("weighted degree 2", labels);
+    Kokkos::deep_copy(wdeg2, rfd.total_deg);
+    refiner.jet_refine(c2.mtx, wdeg2, c2.nb_self_loops, part2, 1, rfd, experiment);
     labels = stat::get_total_labels(part2);
     stat::relabel(part2, rfd);
     std::cout << "Total labels " << labels << std::endl;
-    modularity = stat::modularity(c2.mtx, part2, labels, g.nnz());
+    Kokkos::parallel_for("set final assignments", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+        part(i) = part2(part(i));
+    });
+    modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << modularity << std::endl;
     return part;
 }
