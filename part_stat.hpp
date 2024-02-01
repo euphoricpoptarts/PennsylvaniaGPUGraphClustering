@@ -79,6 +79,14 @@ public:
     using member = typename team_policy_t::member_type;
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
+//data that is preserved between levels in the multilevel scheme
+struct refine_data {
+    gain_vt in_deg, total_deg;
+    scalar_t g_deg = 0;
+    gain_t cut = 0;
+    bool init = false;
+};
+
 static gain_t get_total_cut(const matrix_t g, const part_vt partition){
     gain_t total_cut = 0;
     if(!is_host_space ){
@@ -142,6 +150,36 @@ static void relabel(part_vt labels){
 	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		labels(i) = used(labels(i));
 	});
+}
+
+static void relabel(part_vt labels, refine_data& rfd){
+	ordinal_t n = labels.extent(0);
+	vtx_view_t used("used labels", n);
+	Kokkos::parallel_for("find used labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		ordinal_t l = labels(i);
+		Kokkos::atomic_add(&used(l), 1);
+	});
+    ordinal_t t_labels = 0;
+	Kokkos::parallel_scan("count labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+		if(used(i) > 0){
+			if(final) used(i) = update;
+			update++;
+		}
+	}, t_labels);
+	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		labels(i) = used(labels(i));
+	});
+    gain_vt in_deg("new internal degree", t_labels);
+    gain_vt total_deg("new total degree", t_labels);
+    Kokkos::parallel_for("relabel degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		if(rfd.total_deg(i) > 0){
+            ordinal_t relabeled = used(i);
+            in_deg(relabeled) = rfd.in_deg(i);
+            total_deg(relabeled) = rfd.total_deg(i);
+        }
+	});
+    rfd.in_deg = in_deg;
+    rfd.total_deg = total_deg;
 }
 
 static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count){

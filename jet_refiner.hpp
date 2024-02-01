@@ -82,6 +82,7 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
     using stat = part_stat<matrix_t, part_t>;
+    using refine_data = typename stat::refine_data;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr gain_t GAIN_MIN = std::numeric_limits<gain_t>::lowest();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
@@ -91,15 +92,6 @@ public:
     static const ordinal_t max_sections = 128;
     static const int max_buckets = 50;
     static const int mid_bucket = 25;
-
-//data that is preserved between levels in the multilevel scheme
-struct refine_data {
-    gain_vt in_deg, total_deg;
-    scalar_t total_size = 0;
-    gain_t cut = 0;
-    gain_t total_imb = 0;
-    bool init = false;
-};
 
 struct problem {
     matrix_t g;
@@ -765,6 +757,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         best_state.cut = stat::get_total_cut(g, best_part);
         best_state.in_deg = gain_vt("internal degree of clusters", g.numRows());
         best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
+        best_state.g_deg = g.nnz();
         Kokkos::deep_copy(best_state.in_deg, 0);
         Kokkos::deep_copy(best_state.total_deg, wdeg);
     }

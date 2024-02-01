@@ -51,6 +51,8 @@ part_vt partition(value_t& edge_cut,
     using ref_t = jet_refiner<matrix_t, part_t>;
     using rfd_t = typename ref_t::refine_data;
     using stat = part_stat<matrix_t, part_t>;
+    using contracter_t = contracter<matrix_t>;
+    using clt = contracter_t::coarse_level_triple;
     rfd_t rfd;
     ref_t refiner(g, 256);
     part_vt part("cluster assignments", g.numRows());
@@ -58,6 +60,9 @@ part_vt partition(value_t& edge_cut,
         part(i) = i;
     });
     wgt_view_t nb_self_loops("self loop counter", g.numRows());
+    clt c;
+    c.mtx = g;
+    c.nb_self_loops = nb_self_loops;
     Kokkos::fence();
     Kokkos::Timer t;
     refiner.jet_refine(g, vweights, nb_self_loops, part, 0, rfd, experiment);
@@ -65,10 +70,17 @@ part_vt partition(value_t& edge_cut,
     std::cout << t.seconds() << std::endl;
     edge_cut = rfd.cut;
     ordinal_t labels = stat::get_total_labels(part);
-    stat::relabel(part);
+    stat::relabel(part, rfd);
     std::cout << "Total labels " << labels << std::endl;
     double modularity = stat::modularity(g, part, labels);
     std::cout << "Modularity: " << modularity << std::endl;
+    contracter_t contracter;
+    clt c2 = contracter.build_coarse_graph(c, part, labels, experiment);
+    part_vt part2("coarser clusters", labels);
+    Kokkos::parallel_for("set initial assignments", r_policy(0, labels), KOKKOS_LAMBDA(const ordinal_t i){
+        part2(i) = i;
+    });
+    refiner.jet_refine(c2.mtx, rfd.total_deg, clt.nb_self_loops, part2, 1, rfd, experiment);
     return part;
 }
 
