@@ -76,6 +76,7 @@ public:
     using gain_svt = Kokkos::View<gain_t, Device>;
     using part_vt = Kokkos::View<part_t*, Device>;
     using part_svt = Kokkos::View<part_t, Device>;
+    using obj_vt = Kokkos::View<float*, Device>;
     using edge_subview_t = Kokkos::View<edge_offset_t, Device>;
     using policy_t = Kokkos::RangePolicy<exec_space>;
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
@@ -104,7 +105,7 @@ struct problem {
     matrix_t g;
     wgt_view_t vtx_w;
     wgt_view_t wdeg;
-    double imb;
+    wgt_view_t nb_self_loops;
     ordinal_t opt;
     ordinal_t size_max;
 };
@@ -121,7 +122,8 @@ struct conn_data {
 
 //this struct contains all the scratch memory used by the refinement iterations
 struct scratch_mem {
-    gain_vt gain1, gain2, gain_persistent, evict_start, evict_end;
+    gain_vt gain1, gain2, evict_start, evict_end;
+    obj_vt obj1, gain_persistent;
     vtx_view_t vtx1, vtx2, zeros1;
     part_vt dest_part, undersized;
     vtx_svt counter1;
@@ -133,7 +135,8 @@ struct scratch_mem {
     scratch_mem(const ordinal_t n, const ordinal_t min_size, const part_t k) {
         gain1 = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain scratch 1"), std::max(n, min_size));
         gain2 = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain scratch 2"), n);
-        gain_persistent = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
+        obj1 = obj_vt(Kokkos::ViewAllocateWithoutInitializing("obj scratch 1"), n);
+        gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
         evict_start = gain_vt("evict start", k);
         evict_end = gain_vt("evict end", k);
         undersized = part_vt("undersized parts", k);
@@ -155,7 +158,7 @@ struct scratch_mem {
     conn_data perm_cdata;
 
     //find maximum size for conn_entries and conn_vals
-    edge_offset_t count_gain_size(const matrix_t largest, part_t k){
+    edge_offset_t count_gain_size(const matrix_t largest){
         edge_offset_t gain_size = 0;
         Kokkos::parallel_reduce("comp offsets", policy_t(0, largest.numRows()), KOKKOS_LAMBDA(const ordinal_t& i, edge_offset_t& update){
             ordinal_t degree = largest.graph.row_map(i + 1) - largest.graph.row_map(i);
@@ -168,7 +171,7 @@ struct scratch_mem {
         perm_scratch(largest.numRows(), k*max_sections*max_buckets, k) {
         ordinal_t n = largest.numRows();
         edge_view_t conn_offsets("gain offsets", n + 1);
-        edge_offset_t gain_size = count_gain_size(largest, k);
+        edge_offset_t gain_size = count_gain_size(largest);
         perm_cdata.conn_vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("conn vals"), gain_size);
         perm_cdata.conn_entries = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn entries"), gain_size);
         perm_cdata.conn_offsets = conn_offsets;
@@ -196,7 +199,7 @@ refine_data clone_refine_data(refine_data& rhs){
 
 //determines which vertices (if any) should be moved to another part to decrease cutsize
 //8 kernels, 2 device-host syncs
-vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cdata, scratch_mem& scratch, bool top_level){
+vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& rfd, const conn_data& cdata, scratch_mem& scratch, float filter_ratio){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -205,10 +208,9 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
     part_vt conn_entries = cdata.conn_entries;
     edge_view_t conn_offsets = cdata.conn_offsets;
     gain_vt conn_vals = cdata.conn_vals;
-    gain_vt save_gains = scratch.gain_persistent;
+    obj_vt save_gains = scratch.gain_persistent;
     vtx_view_t lock_bit = cdata.lock_bit;
-    double filter_ratio = 0.75;
-    if(top_level) filter_ratio = 0.25;
+    float inv_2m = 1.0 / static_cast<float>(g.nnz());
     Kokkos::parallel_for("select destination part (lp)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         part_t best = cdata.dest_cache(i);
         if(best != NULL_PART) {
@@ -217,27 +219,35 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
         }
         part_t p = part(i);
         best = p;
-        gain_t b_conn = 0;
-        gain_t p_conn = 0;
+        float wd = prob.wdeg(i);
+        float b_conn = -100000.0;
+        float p_conn = -wd*(wd + 2*(rfd.total_deg(p) - wd))*inv_2m;
         edge_offset_t start = conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
         edge_offset_t end = start + size;
         //finds potential destination as most connected part excluding p
         for(edge_offset_t j = start; j < end; j++){
-            gain_t j_conn = conn_vals(j);
-            if(j_conn > b_conn && conn_entries(j) != p){
-                best = conn_entries(j);
-                b_conn = j_conn;
-            } else if(j_conn > 0 && conn_entries(j) == p){
-                p_conn = j_conn;
+            if(conn_entries(j) > NULL_PART){
+                float j_conn = 2*conn_vals(j);
+                part_t px = conn_entries(j);
+                if(px == p){
+                    p_conn += j_conn;
+                } else {
+                    j_conn = j_conn - wd*(wd + 2*rfd.total_deg(px))*inv_2m;
+                    if(j_conn > b_conn){
+                        b_conn = j_conn;
+                        best = px;
+                    }
+                }
             }
         }
         save_gains(i) = 0;
         if(best != p){
+            float limit = p_conn - filter_ratio*abs(p_conn);
             // vertices must pass this filter in order to be considered further
             // b_conn >= p_conn may seem redundant but it is important
             // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
-            if(b_conn >= p_conn || ((p_conn - b_conn) < floor(filter_ratio*p_conn))){
+            if(b_conn > p_conn || (b_conn >= limit)){
                 save_gains(i) = b_conn - p_conn;
             } else {
                 best = p;
@@ -250,7 +260,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
     //need to store the pre-afterburn gains into a separate view
     //than savegains, because we write new values into it that may not be overwritten
     //if a vertex has its best neighbor cached
-    gain_vt pregain = scratch.gain1;
+    obj_vt pregain = scratch.obj1;
     //write all unlocked vertices that passed the above filter into an unordered list
     //output count of such vertices into num_pos
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
@@ -263,7 +273,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
                 }
                 update++;
             } else if(final){
-                pregain(i) = GAIN_MIN;
+                pregain(i) = -100000.0;
             }
     }, num_pos);
     //truncate scratch views by num_pos
@@ -283,7 +293,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
             ordinal_t v = g.graph.entries(j);
             gain_t vgain = pregain(v);
             //adjust local gain if v has higher priority than i
-            if(vgain > igain || (vgain == igain && v < i)){
+            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && v < i)){
                 part_t vpart = dest_part(v);
                 scalar_t wgt = g.values(j);
                 if(vpart == p){
@@ -301,7 +311,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const conn_data& cda
         }, change);
         t.team_barrier();
         Kokkos::single(Kokkos::PerTeam(t), [&](){
-            if(igain + change >= 0){
+            if(igain + 2*change >= 0){
                 should_swap(t.league_rank()) = 1;
             }
         });
@@ -523,6 +533,7 @@ static gain_t lookup(const part_t* keys, const gain_t* vals, const part_t& targe
 void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, const part_vt dest_part, scratch_mem& scratch, conn_data cdata, refine_data& curr_state){
     const matrix_t& g = prob.g;
     const wgt_view_t& wdeg = prob.wdeg;
+    const wgt_view_t& nb_self_loops = prob.nb_self_loops;
     ordinal_t total_moves = swaps.extent(0);
     //total change in cutsize = (sum over all moves) -((new_b_con - new_p_con) + (old_b_con - old_p_con))
     Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
@@ -548,6 +559,8 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part(i) = best;
         Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
         Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
+        Kokkos::atomic_add(&curr_state.in_deg(p), -nb_self_loops(i));
+        Kokkos::atomic_add(&curr_state.in_deg(best), nb_self_loops(i));
         //update needs to know old part assignment
         dest_part(i) = p;
     });
@@ -741,7 +754,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
     return cdata;
 }
 
-void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, int level, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
+void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, part_vt best_part, int level, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
     Kokkos::Timer y;
     //contains several scratch views that are reused in each iteration
     //reallocating in each iteration would be expensive (GPU memory is often slow to deallocate)
@@ -758,6 +771,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, int level,
     problem prob;
     prob.g = g;
     prob.wdeg = wdeg;
+    prob.nb_self_loops = nb_self_loops;
     if(!best_state.init){
         best_state.init = true;
         std::cout << "Initial " << std::fixed << (best_state.cut / 2) << " ";
@@ -781,13 +795,15 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, int level,
     //repeat until 12 phases since a significant
     //improvement in cut or balance
     //this accounts for at least 3 full lp+rebalancing cycles
+    float filter_ratio = 0.75;
+    //if(level == 0) filter_ratio = 0.25;
     while(count++ <= 11){
         iter_count++;
         vtx_view_t moves;
-        moves = jet_lp(prob, part, cdata, scratch, (level == 0));
+        moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio);
         lab_counter++;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
-        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), g.nnz(), curr_state.in_deg, curr_state.total_deg) << std::endl;
+        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), g.nnz(), curr_state.in_deg, curr_state.total_deg) << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.cut < best_state.cut){
             //do not reset counter if cut improvement is too small

@@ -57,9 +57,10 @@ part_vt partition(value_t& edge_cut,
     Kokkos::parallel_for("set initial assignments", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         part(i) = i;
     });
+    wgt_view_t nb_self_loops("self loop counter", g.numRows());
     Kokkos::fence();
     Kokkos::Timer t;
-    refiner.jet_refine(g, vweights, part, 0, rfd, experiment);
+    refiner.jet_refine(g, vweights, nb_self_loops, part, 0, rfd, experiment);
     Kokkos::fence();
     std::cout << t.seconds() << std::endl;
     edge_cut = rfd.cut;
