@@ -186,7 +186,7 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
     wgt_view_t internal("internal degree", label_count);
     wgt_view_t total("total degree", label_count);
     ordinal_t n = g.numRows();
-    Kokkos::parallel_reduce("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		scalar_t id = 0;
         scalar_t td = 0;
         ordinal_t l = labels(i);
