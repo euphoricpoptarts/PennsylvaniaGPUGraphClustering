@@ -175,9 +175,8 @@ struct scratch_mem {
 void copy_refine_data(refine_data& lhs, refine_data& rhs){
     Kokkos::deep_copy(exec_space(), lhs.in_deg, rhs.in_deg);
     Kokkos::deep_copy(exec_space(), lhs.total_deg, rhs.total_deg);
-    lhs.total_size = rhs.total_size;
+    lhs.g_deg = rhs.g_deg;
     lhs.cut = rhs.cut;
-    lhs.total_imb = rhs.total_imb;
     lhs.init = rhs.init;
 }
 
@@ -202,7 +201,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     gain_vt conn_vals = cdata.conn_vals;
     obj_vt save_gains = scratch.gain_persistent;
     vtx_view_t lock_bit = cdata.lock_bit;
-    float inv_2m = 1.0 / static_cast<float>(g.nnz());
+    float inv_2m = 1.0 / static_cast<float>(rfd.g_deg);
     Kokkos::parallel_for("select destination part (lp)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         part_t best = cdata.dest_cache(i);
         if(best != NULL_PART) {
@@ -796,7 +795,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio);
         lab_counter++;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
-        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), g.nnz(), curr_state.in_deg, curr_state.total_deg) << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
+        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), curr_state.g_deg, curr_state.in_deg, curr_state.total_deg) << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.cut < best_state.cut){
             //do not reset counter if cut improvement is too small

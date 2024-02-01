@@ -78,7 +78,6 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
-    using pool_t = Kokkos::Random_XorShift64_Pool<Device>;
     static constexpr ordinal_t get_null_val() {
         // this value must line up with the null value used by the hashmap
         // accumulator

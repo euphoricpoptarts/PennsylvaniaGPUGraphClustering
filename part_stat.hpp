@@ -182,12 +182,11 @@ static void relabel(part_vt labels, refine_data& rfd){
     rfd.total_deg = total_deg;
 }
 
-static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count){
+static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count, scalar_t g_degree){
     wgt_view_t internal("internal degree", label_count);
     wgt_view_t total("total degree", label_count);
     ordinal_t n = g.numRows();
-    scalar_t g_degree = 0;
-    Kokkos::parallel_reduce("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
+    Kokkos::parallel_reduce("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		scalar_t id = 0;
         scalar_t td = 0;
         ordinal_t l = labels(i);
@@ -198,8 +197,7 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
         }
         Kokkos::atomic_add(&internal(l), id);
         Kokkos::atomic_add(&total(l), td);
-        update += td;
-	}, g_degree);
+	});
     double m = 0;
     Kokkos::parallel_reduce("sum modularity", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, double& update){
         double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);

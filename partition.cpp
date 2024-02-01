@@ -39,6 +39,7 @@
 #include "jet_refiner.hpp"
 #include "defs.h"
 #include "io.hpp"
+#include "contract"
 #include <limits>
 
 using namespace jet_partitioner;
@@ -72,7 +73,7 @@ part_vt partition(value_t& edge_cut,
     ordinal_t labels = stat::get_total_labels(part);
     stat::relabel(part, rfd);
     std::cout << "Total labels " << labels << std::endl;
-    double modularity = stat::modularity(g, part, labels);
+    double modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << modularity << std::endl;
     contracter_t contracter;
     clt c2 = contracter.build_coarse_graph(c, part, labels, experiment);
@@ -80,7 +81,12 @@ part_vt partition(value_t& edge_cut,
     Kokkos::parallel_for("set initial assignments", r_policy(0, labels), KOKKOS_LAMBDA(const ordinal_t i){
         part2(i) = i;
     });
-    refiner.jet_refine(c2.mtx, rfd.total_deg, clt.nb_self_loops, part2, 1, rfd, experiment);
+    refiner.jet_refine(c2.mtx, rfd.total_deg, c2.nb_self_loops, part2, 1, rfd, experiment);
+    labels = stat::get_total_labels(part2);
+    stat::relabel(part2, rfd);
+    std::cout << "Total labels " << labels << std::endl;
+    modularity = stat::modularity(c2.mtx, part2, labels, g.nnz());
+    std::cout << "Modularity: " << modularity << std::endl;
     return part;
 }
 
