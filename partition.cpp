@@ -92,6 +92,7 @@ part_vt partition(value_t& edge_cut,
     });
     modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << modularity << std::endl;
+    refiner.jet_refine(g, vweights, nb_self_loops, part, 0, rfd, experiment);
     return part;
 }
 

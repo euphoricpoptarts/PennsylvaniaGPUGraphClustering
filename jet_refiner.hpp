@@ -178,6 +178,7 @@ void copy_refine_data(refine_data& lhs, refine_data& rhs){
     lhs.g_deg = rhs.g_deg;
     lhs.cut = rhs.cut;
     lhs.init = rhs.init;
+    lhs.mod = rhs.mod;
 }
 
 refine_data clone_refine_data(refine_data& rhs){
@@ -275,14 +276,14 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     //a move is considered to occur before another according to their potential gains
     //and the vertex ids
     Kokkos::parallel_for("afterburner heuristic", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        gain_t change = 0;
+        float change = 0;
         ordinal_t i = pos_moves(t.league_rank());
         part_t best = dest_part(i);
         part_t p = part(i);
-        gain_t igain = pregain(i);
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, gain_t& update){
+        float igain = pregain(i);
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
             ordinal_t v = g.graph.entries(j);
-            gain_t vgain = pregain(v);
+            float vgain = pregain(v);
             //adjust local gain if v has higher priority than i
             if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && v < i)){
                 part_t vpart = dest_part(v);
@@ -754,6 +755,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     //ie. if this is the coarsest level
     if(!best_state.init){
         best_state.cut = stat::get_total_cut(g, best_part);
+        best_state.mod = -1.0;
         best_state.in_deg = gain_vt("internal degree of clusters", g.numRows());
         best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
         best_state.g_deg = g.nnz();
@@ -788,18 +790,19 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     //improvement in cut or balance
     //this accounts for at least 3 full lp+rebalancing cycles
     float filter_ratio = 0.75;
-    //if(level == 0) filter_ratio = 0.25;
+    if(level == 0) filter_ratio = 0.75;
     while(count++ <= 11){
         iter_count++;
         vtx_view_t moves;
         moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio);
         lab_counter++;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
-        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << stat::modularity(g.numRows(), curr_state.g_deg, curr_state.in_deg, curr_state.total_deg) << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
+        curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
+        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
-        if(curr_state.cut < best_state.cut){
+        if(curr_state.mod > best_state.mod){
             //do not reset counter if cut improvement is too small
-            if(curr_state.cut < tol*best_state.cut){
+            if(curr_state.mod > tol*best_state.mod){
                 count = 0;
             }
             copy_refine_data(best_state, curr_state);

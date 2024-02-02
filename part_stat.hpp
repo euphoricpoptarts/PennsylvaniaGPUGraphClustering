@@ -84,6 +84,7 @@ struct refine_data {
     gain_vt in_deg, total_deg;
     scalar_t g_deg = 0;
     gain_t cut = 0;
+    double mod = -1.0;
     bool init = false;
 };
 
@@ -208,9 +209,9 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
     return m;
 }
 
-static double modularity(const ordinal_t t_labels, const scalar_t g_degree, const gain_vt internal, const gain_vt total){
+static double modularity(const scalar_t g_degree, const gain_vt internal, const gain_vt total){
     double m = 0;
-    Kokkos::parallel_reduce("sum modularity", policy_t(0, t_labels), KOKKOS_LAMBDA(const ordinal_t l, double& update){
+    Kokkos::parallel_reduce("sum modularity", policy_t(0, internal.size()), KOKKOS_LAMBDA(const ordinal_t l, double& update){
         double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
         double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
         double l_mod = internal_ratio - (total_ratio*total_ratio);
