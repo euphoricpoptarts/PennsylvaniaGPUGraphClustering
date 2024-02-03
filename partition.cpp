@@ -43,56 +43,63 @@
 #include <limits>
 
 using namespace jet_partitioner;
+using ref_t = jet_refiner<matrix_t, part_t>;
+using rfd_t = typename ref_t::refine_data;
+using stat = part_stat<matrix_t, part_t>;
+using contracter_t = contracter<matrix_t>;
+using clt = contracter_t::coarse_level_triple;
+
+part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
+    part_vt part("cluster assignments", c.mtx.numRows());
+    Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+        part(i) = i;
+    });
+    std::cout << "Pre-refine" << std::endl;
+    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+    stat::relabel(part, rfd);
+    if(countdown > 0){
+        contracter_t contracter;
+        ordinal_t labels = stat::get_total_labels(part);
+        clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
+        wgt_view_t active_wdeg("weighted degree 2", labels);
+        Kokkos::deep_copy(active_wdeg, rfd.total_deg);
+        part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment);
+        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+            part(i) = active_part(part(i));
+        });
+
+        labels = stat::get_total_labels(part);
+        std::cout << "Total labels " << labels << std::endl;
+        labels = stat::get_total_labels(active_part);
+        std::cout << "Total labels " << labels << std::endl;
+        std::cout << "Post-refine" << std::endl;
+        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+        stat::relabel(part, rfd);
+    }
+    return part;
+}
 
 part_vt partition(value_t& edge_cut,
                                   matrix_t g,
                                   wgt_view_t vweights,
-                                  bool uniform_ew,
                                   ExperimentLoggerUtil<value_t>& experiment) {
-    using ref_t = jet_refiner<matrix_t, part_t>;
-    using rfd_t = typename ref_t::refine_data;
-    using stat = part_stat<matrix_t, part_t>;
-    using contracter_t = contracter<matrix_t>;
-    using clt = contracter_t::coarse_level_triple;
     rfd_t rfd;
     ref_t refiner(g, 256);
-    part_vt part("cluster assignments", g.numRows());
-    Kokkos::parallel_for("set initial assignments", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-        part(i) = i;
-    });
     wgt_view_t nb_self_loops("self loop counter", g.numRows());
     clt c;
     c.mtx = g;
     c.nb_self_loops = nb_self_loops;
+    clt active_clt = c;
     Kokkos::fence();
     Kokkos::Timer t;
-    refiner.jet_refine(g, vweights, nb_self_loops, part, 0, rfd, experiment);
+    part_vt part = rec_part(refiner, c, rfd, vweights, 2, experiment);
     Kokkos::fence();
-    std::cout << t.seconds() << std::endl;
-    edge_cut = rfd.cut;
     ordinal_t labels = stat::get_total_labels(part);
-    stat::relabel(part, rfd);
     std::cout << "Total labels " << labels << std::endl;
     double modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << modularity << std::endl;
-    contracter_t contracter;
-    clt c2 = contracter.build_coarse_graph(c, part, labels, experiment);
-    part_vt part2("coarser clusters", labels);
-    Kokkos::parallel_for("set initial assignments", r_policy(0, labels), KOKKOS_LAMBDA(const ordinal_t i){
-        part2(i) = i;
-    });
-    wgt_view_t wdeg2("weighted degree 2", labels);
-    Kokkos::deep_copy(wdeg2, rfd.total_deg);
-    refiner.jet_refine(c2.mtx, wdeg2, c2.nb_self_loops, part2, 1, rfd, experiment);
-    labels = stat::get_total_labels(part2);
-    stat::relabel(part2, rfd);
-    std::cout << "Total labels " << labels << std::endl;
-    Kokkos::parallel_for("set final assignments", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-        part(i) = part2(part(i));
-    });
-    modularity = stat::modularity(g, part, labels, g.nnz());
-    std::cout << "Modularity: " << modularity << std::endl;
-    refiner.jet_refine(g, vweights, nb_self_loops, part, 0, rfd, experiment);
+    std::cout << t.seconds() << std::endl;
+    edge_cut = rfd.cut;
     return part;
 }
 
@@ -134,7 +141,7 @@ int main(int argc, char **argv) {
         part_vt best_part;
         value_t edgecut = 0;
         ExperimentLoggerUtil<value_t> experiment;
-        part_vt part = partition(edgecut, g, vweights, uniform_ew, experiment);
+        part_vt part = partition(edgecut, g, vweights, experiment);
 
         if(part_file != nullptr) write_part(best_part, part_file);
     }

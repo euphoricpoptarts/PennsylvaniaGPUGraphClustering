@@ -172,7 +172,7 @@ static void relabel(part_vt labels, refine_data& rfd){
 	});
     gain_vt in_deg("new internal degree", t_labels);
     gain_vt total_deg("new total degree", t_labels);
-    Kokkos::parallel_for("relabel degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+    Kokkos::parallel_for("relabel degrees", policy_t(0, rfd.total_deg.size()), KOKKOS_LAMBDA(const ordinal_t i){
 		if(rfd.total_deg(i) > 0){
             ordinal_t relabeled = used(i);
             in_deg(relabeled) = rfd.in_deg(i);
