@@ -153,6 +153,26 @@ static void relabel(part_vt labels){
 	});
 }
 
+static void reset_rfd(matrix_t& g, part_vt labels, ordinal_t label_count, refine_data& rfd){
+    wgt_view_t internal("internal degree", label_count);
+    wgt_view_t total("total degree", label_count);
+    ordinal_t n = g.numRows();
+    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		scalar_t id = 0;
+        scalar_t td = 0;
+        ordinal_t l = labels(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            td += g.values(j);
+            ordinal_t v = g.graph.entries(j);
+            if(l == labels(v)) id += g.values(j);
+        }
+        Kokkos::atomic_add(&internal(l), id);
+        Kokkos::atomic_add(&total(l), td);
+	});
+    rfd.in_deg = internal;
+    rfd.total_deg = total;
+}
+
 static void relabel(part_vt labels, refine_data& rfd){
 	ordinal_t n = labels.extent(0);
 	vtx_view_t used("used labels", n);

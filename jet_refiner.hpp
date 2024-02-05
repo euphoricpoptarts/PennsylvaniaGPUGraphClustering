@@ -235,11 +235,11 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
         }
         save_gains(i) = 0;
         if(best != p){
-            float limit = p_conn - filter_ratio*abs(p_conn);
+            float limit = p_conn - filter_ratio*(p_conn);
             // vertices must pass this filter in order to be considered further
             // b_conn >= p_conn may seem redundant but it is important
             // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
-            if(b_conn > p_conn || (b_conn >= limit)){
+            if(b_conn >= p_conn || (b_conn >= limit)){
                 save_gains(i) = b_conn - p_conn;
             } else {
                 best = p;
@@ -798,7 +798,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         lab_counter++;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
         curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
-        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
+        std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.mod > best_state.mod){
             //do not reset counter if cut improvement is too small
