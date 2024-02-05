@@ -83,7 +83,7 @@ part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdo
         part(i) = i;
     });
     std::cout << "Pre-refine" << std::endl;
-    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
     stat::relabel(part, rfd);
     if(countdown > 0){
         contracter_t contracter;
@@ -101,7 +101,7 @@ part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdo
         labels = stat::get_total_labels(active_part);
         std::cout << "Total labels " << labels << std::endl;
         std::cout << "Post-refine" << std::endl;
-        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
         stat::relabel(part, rfd);
     }
     return part;
@@ -109,7 +109,7 @@ part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdo
 
 part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
     std::cout << "Pre-refine" << std::endl;
-    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
     stat::relabel(part, rfd);
     if(countdown > 0){
         contracter_t contracter;
@@ -127,7 +127,7 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
         labels = stat::get_total_labels(active_part);
         std::cout << "Total labels " << labels << std::endl;
         std::cout << "Post-refine" << std::endl;
-        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, 0, rfd, experiment);
+        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
         stat::relabel(part, rfd);
     }
     return part;
