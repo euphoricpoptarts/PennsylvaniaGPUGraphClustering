@@ -339,6 +339,7 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
         //mark adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
+            cdata.dest_cache(v) = NULL_PART;
             if(swap_bit(v) == 0) swap_bit(v) = 1;
         });
     });
@@ -556,7 +557,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         //update needs to know old part assignment
         dest_part(i) = p;
     });
-    if(total_moves > static_cast<ordinal_t>(g.numRows())){
+    if(total_moves > static_cast<ordinal_t>(g.numRows() / 4)){
         update_large(prob, part, swaps, scratch, cdata);
     } else {
         update_small(prob, part, swaps, dest_part, cdata);
