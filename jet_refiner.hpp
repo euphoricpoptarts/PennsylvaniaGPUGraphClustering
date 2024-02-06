@@ -523,8 +523,7 @@ static gain_t lookup(const part_t* keys, const gain_t* vals, const part_t& targe
 
 //perform swaps, update gains, and compute change to cut and imbalance
 //4 kernels, 1 device-host syncs
-void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, const part_vt dest_part, scratch_mem& scratch, conn_data cdata, refine_data& curr_state){
-    const matrix_t& g = prob.g;
+void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, const part_vt dest_part, scratch_mem& scratch, conn_data cdata, refine_data& curr_state, bool use_big){
     const wgt_view_t& wdeg = prob.wdeg;
     const wgt_view_t& nb_self_loops = prob.nb_self_loops;
     ordinal_t total_moves = swaps.extent(0);
@@ -557,7 +556,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         //update needs to know old part assignment
         dest_part(i) = p;
     });
-    if(total_moves > static_cast<ordinal_t>(g.numRows() / 4)){
+    if(use_big){
         update_large(prob, part, swaps, scratch, cdata);
     } else {
         update_small(prob, part, swaps, dest_part, cdata);
@@ -792,12 +791,14 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     //this accounts for at least 3 full lp+rebalancing cycles
     float filter_ratio = 0.5;
     if(best_state.g_deg == g.nnz()) filter_ratio = 0.5;
+    bool use_big = true;
     while(count++ <= 11){
         iter_count++;
+        if(iter_count > 3) use_big = false;
         vtx_view_t moves;
         moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio);
         lab_counter++;
-        perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state);
+        perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
         curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
         std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
