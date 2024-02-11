@@ -171,20 +171,17 @@ struct combineAndDedupe {
     vtx_view_t htable;
     wgt_view_t hvals;
     edge_view_t hrow_map;
-    wgt_view_t nb_self_loops;
 
     combineAndDedupe(matrix_t _g,
             vtx_view_t _vcmap,
             vtx_view_t _htable,
             wgt_view_t _hvals,
-            edge_view_t _hrow_map,
-            wgt_view_t _nb_self_loops) :
+            edge_view_t _hrow_map) :
             g(_g),
             vcmap(_vcmap),
             htable(_htable),
             hvals(_hvals),
-            hrow_map(_hrow_map),
-            nb_self_loops(_nb_self_loops) {}
+            hrow_map(_hrow_map) {}
 
     KOKKOS_INLINE_FUNCTION
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u) const {
@@ -216,8 +213,6 @@ struct combineAndDedupe {
             if(i != u){
                 edge_offset_t offset = insert(hash_start, size, u);
                 Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
-            } else {
-                Kokkos::atomic_add(&nb_self_loops(i), g.values(j));
             }
         });
     }
@@ -235,8 +230,6 @@ struct combineAndDedupe {
             if(i != u){
                 edge_offset_t offset = insert(hash_start, size, u);
                 Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
-            } else {
-                Kokkos::atomic_add(&nb_self_loops(i), g.values(j));
             }
         }
     }
@@ -375,7 +368,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
-    combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, c_vtx_w);
+    combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map);
     if(!is_host_space && hash_size / n >= 12) {
         Kokkos::parallel_for("deduplicate", team_policy_t(n, Kokkos::AUTO), cnd);
     } else {

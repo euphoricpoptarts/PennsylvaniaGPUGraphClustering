@@ -90,6 +90,7 @@ part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdo
         ordinal_t labels = stat::get_total_labels(part);
         clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
         wgt_view_t active_wdeg("weighted degree 2", labels);
+        Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
         Kokkos::deep_copy(active_wdeg, rfd.total_deg);
         part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment);
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
@@ -117,6 +118,7 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
         clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
         wgt_view_t active_wdeg("weighted degree 2", labels);
         Kokkos::deep_copy(active_wdeg, rfd.total_deg);
+        Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
         part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment);
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
             part(i) = active_part(part(i));
