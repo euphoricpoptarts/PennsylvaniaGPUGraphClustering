@@ -209,6 +209,10 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             dest_part(i) = best;
             return;
         }
+        if(lock_bit(i)){
+            dest_part(i) = part(i);
+            return;
+        }
         part_t p = part(i);
         best = p;
         float wd = prob.wdeg(i);
@@ -288,17 +292,11 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && v < i)){
                 part_t vpart = dest_part(v);
                 scalar_t wgt = g.values(j);
-                if(vpart == p){
-                    update -= wgt;
-                } else if(vpart == best){
-                    update += wgt;
-                }
+                    update -= (vpart == p) ? wgt : 0;
+                    update += (vpart == best) ? wgt : 0;
                 vpart = part(v);
-                if(vpart == p){
-                    update += wgt;
-                } else if(vpart == best){
-                    update -= wgt;
-                }
+                    update += (vpart == p) ? wgt : 0;
+                    update -= (vpart == best) ? wgt : 0;
             }
         }, change);
         t.team_barrier();
