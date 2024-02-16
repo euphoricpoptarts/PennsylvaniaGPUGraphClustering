@@ -153,26 +153,6 @@ static void relabel(part_vt labels){
 	});
 }
 
-static void reset_rfd(matrix_t& g, part_vt labels, ordinal_t label_count, refine_data& rfd){
-    wgt_view_t internal("internal degree", label_count);
-    wgt_view_t total("total degree", label_count);
-    ordinal_t n = g.numRows();
-    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-		scalar_t id = 0;
-        scalar_t td = 0;
-        ordinal_t l = labels(i);
-        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
-            td += g.values(j);
-            ordinal_t v = g.graph.entries(j);
-            if(l == labels(v)) id += g.values(j);
-        }
-        Kokkos::atomic_add(&internal(l), id);
-        Kokkos::atomic_add(&total(l), td);
-	});
-    rfd.in_deg = internal;
-    rfd.total_deg = total;
-}
-
 static void relabel(part_vt labels, refine_data& rfd){
 	ordinal_t n = labels.extent(0);
 	vtx_view_t used("used labels", n);
@@ -238,6 +218,28 @@ static double modularity(const scalar_t g_degree, const gain_vt internal, const 
         update += l_mod;
     }, m);
     return m;
+}
+
+static void reset_rfd(matrix_t& g, part_vt labels, wgt_view_t nb_self_loops, ordinal_t label_count, refine_data& rfd){
+    wgt_view_t internal("internal degree", label_count);
+    wgt_view_t total("total degree", label_count);
+    ordinal_t n = g.numRows();
+    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		scalar_t id = nb_self_loops(i);
+        scalar_t td = nb_self_loops(i);
+        ordinal_t l = labels(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            td += g.values(j);
+            ordinal_t v = g.graph.entries(j);
+            if(l == labels(v)) id += g.values(j);
+        }
+        Kokkos::atomic_add(&internal(l), id);
+        Kokkos::atomic_add(&total(l), td);
+	});
+    rfd.in_deg = internal;
+    rfd.total_deg = total;
+    rfd.mod = modularity(rfd.g_deg, rfd.in_deg, rfd.total_deg);
+    rfd.cut = get_total_cut(g, labels);
 }
 
 static int total_labels(const gain_vt total){
@@ -376,6 +378,15 @@ static int64_t least_squares(const matrix_t g, part_vt part, const part_t k){
         int64_t ex = ex_cut(p);
         res += ex*ex;
     }, result);
+    return result;
+}
+
+static scalar_t sum(const wgt_view_t wdeg){
+    scalar_t result = 0;
+    Kokkos::parallel_reduce("sum view", policy_t(0, wdeg.size()), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
+        update += wdeg(i);
+    }, result);
+    std::cout << "G degree: " << result << std::endl;
     return result;
 }
 

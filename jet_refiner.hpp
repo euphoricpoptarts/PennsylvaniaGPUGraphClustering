@@ -98,6 +98,7 @@ struct problem {
     wgt_view_t vtx_w;
     wgt_view_t wdeg;
     wgt_view_t nb_self_loops;
+    part_vt constraint;
     ordinal_t opt;
     ordinal_t size_max;
 };
@@ -330,6 +331,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
 //2 kernels, 0 device-host syncs
 void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scratch_mem& scratch, conn_data& cdata){
     const matrix_t& g = prob.g;
+    const part_vt& constraint = prob.constraint;
     ordinal_t total_moves = swaps.extent(0);
     vtx_view_t swap_bit = scratch.zeros1;
     Kokkos::parallel_for("mark adjacent", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
@@ -354,6 +356,7 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             part_t used_cap = 0;
             for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
                 ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) continue;
                 gain_t wgt = g.values(j);
                 part_t p = part(v);
                 part_t p_o = p % size;
@@ -380,6 +383,7 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
                 }
                 for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
                     ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) continue;
                     gain_t wgt = g.values(j);
                     part_t p = part(v);
                     part_t p_o = p % size;
@@ -405,6 +409,7 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
 //2 kernels, 0 device-host syncs
 void update_small(const problem& prob, const part_vt part, const vtx_view_t swaps, const part_vt dest_part, conn_data& cdata){
     const matrix_t& g = prob.g;
+    const part_vt& constraint = prob.constraint;
     ordinal_t total_moves = swaps.extent(0);
     Kokkos::parallel_for("update conns (subtract) (high degree)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = swaps(t.league_rank());
@@ -413,6 +418,7 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
         //subtract i's contribution to p connectivity for adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) return;
             gain_t wgt = g.values(j);
             edge_offset_t v_start = cdata.conn_offsets(v);
             part_t v_size = cdata.conn_table_sizes(v);
@@ -437,6 +443,7 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
         //add i's contribution to best connectivity for adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) return;
             gain_t wgt = g.values(j);
             cdata.dest_cache(v) = NULL_PART;
             edge_offset_t v_start = cdata.conn_offsets(v);
@@ -579,7 +586,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
 } 
 
 //initializes datastructures
-conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, const part_vt& part){
+conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, const part_vt& part, const part_vt& constraint){
     ordinal_t n = g.numRows();
     conn_data cdata;
     cdata.conn_offsets = Kokkos::subview(scratch_cdata.conn_offsets, std::make_pair(static_cast<ordinal_t>(0), n + 1));
@@ -614,6 +621,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
             part_t used_cap = 0;
             for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
                 ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) continue;
                 gain_t wgt = g.values(j);
                 part_t p = part(v);
                 part_t p_o = p % size;
@@ -640,6 +648,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
                 }
                 for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
                     ordinal_t v = g.graph.entries(j);
+                    if(constraint(i) != constraint(v)) continue;
                     gain_t wgt = g.values(j);
                     part_t p = part(v);
                     part_t p_o = p % size;
@@ -744,7 +753,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
     return cdata;
 }
 
-void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, part_vt best_part, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
+void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, part_vt best_part, part_vt constraint, refine_data& best_state, ExperimentLoggerUtil<scalar_t>& experiment){
     Kokkos::Timer y;
     //contains several scratch views that are reused in each iteration
     //reallocating in each iteration would be expensive (GPU memory is often slow to deallocate)
@@ -756,14 +765,15 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         best_state.mod = -1.0;
         best_state.in_deg = gain_vt("internal degree of clusters", g.numRows());
         best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
-        best_state.g_deg = g.nnz();
-        Kokkos::deep_copy(best_state.in_deg, 0);
+        best_state.g_deg = stat::sum(wdeg);
+        Kokkos::deep_copy(best_state.in_deg, nb_self_loops);
         Kokkos::deep_copy(best_state.total_deg, wdeg);
     }
     problem prob;
     prob.g = g;
     prob.wdeg = wdeg;
     prob.nb_self_loops = nb_self_loops;
+    prob.constraint = constraint;
     if(!best_state.init){
         best_state.init = true;
         std::cout << "Initial " << std::fixed << (best_state.cut / 2) << " ";
@@ -772,7 +782,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     refine_data curr_state = clone_refine_data(best_state);
     part_vt part(Kokkos::ViewAllocateWithoutInitializing("current partition"), g.numRows());
     Kokkos::deep_copy(exec_space(), part, best_part);
-    conn_data cdata = init_conn_data(perm_cdata, g, part);
+    conn_data cdata = init_conn_data(perm_cdata, g, part, constraint);
     int count = 0;
     int iter_count = 0;
     Kokkos::fence();
