@@ -140,9 +140,9 @@ part_vt partition(value_t& edge_cut,
     clt active_clt = c;
     Kokkos::fence();
     Kokkos::Timer t;
-    part_vt part = rec_part(refiner, c, rfd, vweights, 3, experiment);
+    part_vt part = rec_part(refiner, c, rfd, vweights, 4, experiment);
     for(int i = 0; i < 3; i++){
-        part = rec_part(refiner, part, c, rfd, vweights, 3, experiment);
+        part = rec_part(refiner, part, c, rfd, vweights, 4, experiment);
     }
     Kokkos::fence();
     part = connected_comps(g, part);
