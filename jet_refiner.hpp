@@ -114,30 +114,22 @@ struct conn_data {
 
 //this struct contains all the scratch memory used by the refinement iterations
 struct scratch_mem {
-    gain_vt gain1, gain2, evict_start, evict_end;
+    gain_vt gain1;
     obj_vt obj1, gain_persistent;
     vtx_view_t vtx1, vtx2, zeros1;
     part_vt dest_part, undersized;
-    vtx_svt counter1;
     gain_svt cut_change1, cut_change2, max_part;
     gain_vt reduce_locs;
     typename gain_vt::HostMirror reduce_copy;
-    part_svt total_undersized;
 
-    scratch_mem(const ordinal_t n, const ordinal_t min_size, const part_t k) {
-        gain1 = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain scratch 1"), std::max(n, min_size));
-        gain2 = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain scratch 2"), n);
+    scratch_mem(const ordinal_t n) {
+        gain1 = gain_vt(Kokkos::ViewAllocateWithoutInitializing("gain scratch 1"), n);
         obj1 = obj_vt(Kokkos::ViewAllocateWithoutInitializing("obj scratch 1"), n);
         gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
-        evict_start = gain_vt("evict start", k);
-        evict_end = gain_vt("evict end", k);
-        undersized = part_vt("undersized parts", k);
         vtx1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
-        vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), std::max(n, min_size));
+        vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
         dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
         zeros1 = vtx_view_t("zeros 1", n);
-        counter1 = vtx_svt("counter 1");
-        total_undersized = part_svt("total undersized");
         reduce_locs = gain_vt("reduce to here", 3);
         reduce_copy = Kokkos::create_mirror_view(reduce_locs);
         cut_change1 = Kokkos::subview(reduce_locs, 0);
@@ -159,8 +151,8 @@ struct scratch_mem {
         return gain_size;
     }
 
-    jet_refiner(const matrix_t largest, part_t k) :
-        perm_scratch(largest.numRows(), k*max_sections*max_buckets, k) {
+    jet_refiner(const matrix_t largest) :
+        perm_scratch(largest.numRows()) {
         ordinal_t n = largest.numRows();
         edge_view_t conn_offsets("gain offsets", n + 1);
         edge_offset_t gain_size = count_gain_size(largest);

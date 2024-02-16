@@ -140,7 +140,7 @@ part_vt partition(value_t& edge_cut,
                                   wgt_view_t vweights,
                                   ExperimentLoggerUtil<value_t>& experiment) {
     rfd_t rfd;
-    ref_t refiner(g, 256);
+    ref_t refiner(g);
     wgt_view_t nb_self_loops("self loop counter", g.numRows());
     clt c;
     c.mtx = g;
