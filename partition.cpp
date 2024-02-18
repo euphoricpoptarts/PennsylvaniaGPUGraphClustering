@@ -77,35 +77,14 @@ part_vt connected_comps(matrix_t g, part_vt part){
     return comp_ids;
 }
 
+part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment);
+
 part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
     part_vt part("cluster assignments", c.mtx.numRows());
     Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         part(i) = i;
     });
-    std::cout << "Pre-refine" << std::endl;
-    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
-    stat::relabel(part, rfd);
-    if(countdown > 0){
-        contracter_t contracter;
-        ordinal_t labels = stat::get_total_labels(part);
-        clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
-        wgt_view_t active_wdeg("weighted degree 2", labels);
-        Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
-        Kokkos::deep_copy(active_wdeg, rfd.total_deg);
-        part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment);
-        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-            part(i) = active_part(part(i));
-        });
-
-        labels = stat::get_total_labels(part);
-        std::cout << "Total labels " << labels << std::endl;
-        labels = stat::get_total_labels(active_part);
-        std::cout << "Total labels " << labels << std::endl;
-        std::cout << "Post-refine" << std::endl;
-        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
-        stat::relabel(part, rfd);
-    }
-    return part;
+    return rec_part(refiner, part, c, rfd, wdeg, countdown, experiment);
 }
 
 part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
@@ -114,20 +93,15 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
     stat::relabel(part, rfd);
     if(countdown > 0){
         contracter_t contracter;
-        ordinal_t labels = stat::get_total_labels(part);
-        clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
-        wgt_view_t active_wdeg("weighted degree 2", labels);
+        clt active_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
+        wgt_view_t active_wdeg("weighted degree 2", rfd.label_count);
         Kokkos::deep_copy(active_wdeg, rfd.total_deg);
         Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
         part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment);
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
             part(i) = active_part(part(i));
         });
-
-        labels = stat::get_total_labels(part);
-        std::cout << "Total labels " << labels << std::endl;
-        labels = stat::get_total_labels(active_part);
-        std::cout << "Total labels " << labels << std::endl;
+        std::cout << "Total labels " << rfd.label_count << std::endl;
         std::cout << "Post-refine" << std::endl;
         refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, rfd, experiment);
         stat::relabel(part, rfd);

@@ -138,19 +138,14 @@ struct countingFunctor {
     matrix_t g;
     vtx_view_t vcmap;
     edge_view_t degree_initial;
-    wgt_view_t c_vtx_w, f_vtx_w;
     ordinal_t workLength;
 
     countingFunctor(matrix_t _g,
             vtx_view_t _vcmap,
-            edge_view_t _degree_initial,
-            wgt_view_t _c_vtx_w,
-            wgt_view_t _f_vtx_w) :
+            edge_view_t _degree_initial) :
         g(_g),
         vcmap(_vcmap),
         degree_initial(_degree_initial),
-        c_vtx_w(_c_vtx_w),
-        f_vtx_w(_f_vtx_w),
         workLength(_g.numRows()) {}
 
     KOKKOS_INLINE_FUNCTION
@@ -161,7 +156,6 @@ struct countingFunctor {
         edge_offset_t end = g.graph.row_map(i + 1);
         ordinal_t nonLoopEdgesTotal = end - start;
         Kokkos::atomic_add(&degree_initial(u), nonLoopEdgesTotal);
-        Kokkos::atomic_add(&c_vtx_w(u), f_vtx_w(i));
     }
 };
 
@@ -343,9 +337,8 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
 
     Kokkos::Timer timer;
     edge_view_t hrow_map("hashtable row map", nc + 1);
-    wgt_view_t f_vtx_w = level.nb_self_loops;
     wgt_view_t c_vtx_w = wgt_view_t("coarse self loop counts", nc);
-    countingFunctor countF(g, vcmap, hrow_map, c_vtx_w, f_vtx_w);
+    countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Count, timer.seconds());
