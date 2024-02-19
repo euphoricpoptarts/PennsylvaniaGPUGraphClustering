@@ -133,6 +133,10 @@ part_vt partition(value_t& edge_cut,
     std::cout << "Total labels " << labels << std::endl;
     double modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << std::setprecision(6) << modularity << std::endl;
+    wgt_view_t vtx_w("vertex weights", g.numRows());
+    Kokkos::deep_copy(vtx_w, 1);
+    wgt_view_t part_sizes = stat::get_part_sizes(g, vtx_w, part, labels);
+    std::cout << "Largest part: " << static_cast<double>(stat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
     edge_cut = rfd.cut;
     return part;
 }
@@ -172,12 +176,11 @@ int main(int argc, char **argv) {
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
 
-        part_vt best_part;
         value_t edgecut = 0;
         ExperimentLoggerUtil<value_t> experiment;
         part_vt part = partition(edgecut, g, vweights, experiment);
 
-        if(part_file != nullptr) write_part(best_part, part_file);
+        if(part_file != nullptr) write_part(part, part_file);
     }
     Kokkos::finalize();
 
