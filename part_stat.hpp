@@ -242,6 +242,7 @@ static void reset_rfd(matrix_t& g, part_vt labels, wgt_view_t nb_self_loops, ord
     rfd.total_deg = total;
     rfd.mod = modularity(rfd.g_deg, rfd.in_deg, rfd.total_deg);
     rfd.cut = get_total_cut(g, labels);
+    rfd.label_count = label_count;
 }
 
 static int total_labels(const gain_vt total){
