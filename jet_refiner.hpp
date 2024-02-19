@@ -338,31 +338,45 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
         });
     });
     //recompute conn tables for each vertex adjacent to a moved vertex
-    Kokkos::parallel_for("reset conn DS", dyn_policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+    Kokkos::parallel_for("reset conn DS", dyn_team_policy_t(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        const ordinal_t i = t.league_rank();
         if(swap_bit(i) == 1){
             edge_offset_t g_start = cdata.conn_offsets(i);
             edge_offset_t g_end = cdata.conn_offsets(i + 1);
-            for(edge_offset_t j = g_start; j < g_end; j++){
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
                 cdata.conn_entries(j) = NULL_PART;
                 cdata.conn_vals(j) = 0;
-            }
+            });
             part_t size = g_end - g_start;
             part_t used_cap = 0;
-            for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
+            part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
+            gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+            t.team_barrier();
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j, part_t& update){
                 ordinal_t v = g.graph.entries(j);
-                if(constraint(i) != constraint(v)) continue;
+                if(constraint(i) != constraint(v)) return;
                 gain_t wgt = g.values(j);
                 part_t p = part(v);
                 part_t p_o = p % size;
-                    while(cdata.conn_entries(g_start + p_o) != NULL_PART && cdata.conn_entries(g_start + p_o) != p){
-                        p_o = (p_o + 1) % size;
+                    bool success = false;
+                    while(!success){
+                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
+                            p_o = (p_o + 1) % size;
+                        }
+                        if(s_conn_entries[p_o] == p){
+                            success = true;
+                        } else {
+                            if(Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p)) update++;
+                            if(s_conn_entries[p_o] == p){
+                                success = true;
+                            } else {
+                                p_o = (p_o + 1) % size;
+                            }
+                        }
                     }
-                cdata.conn_vals(g_start + p_o) += wgt;
-                if(cdata.conn_entries(g_start + p_o) == NULL_PART){
-                    cdata.conn_entries(g_start + p_o) = p;
-                    used_cap++;
-                }
-            }
+                Kokkos::atomic_add(s_conn_vals + p_o, wgt);
+            }, used_cap);
+            t.team_barrier();
             part_t old_size = size;
             size = used_cap;
             part_t quarter_size = size / 4;
@@ -370,25 +384,35 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             if(quarter_size < min_inc) quarter_size = min_inc;
             size += quarter_size;
             if(size < old_size){
-                //don't get fancy just redo it with a smaller conn table
-                for(edge_offset_t j = g_start; j < g_start + old_size; j++){
-                    cdata.conn_entries(j) = NULL_PART;
-                    cdata.conn_vals(j) = 0;
-                }
-                for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
-                    ordinal_t v = g.graph.entries(j);
-                if(constraint(i) != constraint(v)) continue;
-                    gain_t wgt = g.values(j);
-                    part_t p = part(v);
-                    part_t p_o = p % size;
-                        while(cdata.conn_entries(g_start + p_o) != NULL_PART && cdata.conn_entries(g_start + p_o) != p){
+            //don't get fancy just redo it with a smaller conn table
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
+                cdata.conn_entries(j) = NULL_PART;
+                cdata.conn_vals(j) = 0;
+            });
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j){
+                ordinal_t v = g.graph.entries(j);
+                if(constraint(i) != constraint(v)) return;
+                gain_t wgt = g.values(j);
+                part_t p = part(v);
+                part_t p_o = p % size;
+                    bool success = false;
+                    while(!success){
+                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
                             p_o = (p_o + 1) % size;
                         }
-                    cdata.conn_vals(g_start + p_o) += wgt;
-                    if(cdata.conn_entries(g_start + p_o) == NULL_PART){
-                        cdata.conn_entries(g_start + p_o) = p;
+                        if(s_conn_entries[p_o] == p){
+                            success = true;
+                        } else {
+                            Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p);
+                            if(s_conn_entries[p_o] == p){
+                                success = true;
+                            } else {
+                                p_o = (p_o + 1) % size;
+                            }
+                        }
                     }
-                }
+                Kokkos::atomic_add(s_conn_vals + p_o, wgt);
+            });
             } else {
                 size = old_size;
             }
@@ -608,55 +632,37 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
     //conn tables are resized to be small so that traversal is faster, but large enough so that updates have few collisions
     if(true) {
         //low degree version
-        Kokkos::parallel_for("init conn DS", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t& i){
+        Kokkos::parallel_for("init conn DS", dyn_team_policy_t(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+            ordinal_t i = t.league_rank();
             edge_offset_t g_start = cdata.conn_offsets(i);
             edge_offset_t g_end = cdata.conn_offsets(i + 1);
             part_t size = g_end - g_start;
-            part_t used_cap = 0;
-            for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
+            part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
+            gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j){
                 ordinal_t v = g.graph.entries(j);
-                if(constraint(i) != constraint(v)) continue;
+                if(constraint(i) != constraint(v)) return;
                 gain_t wgt = g.values(j);
                 part_t p = part(v);
                 part_t p_o = p % size;
-                    while(cdata.conn_entries(g_start + p_o) != NULL_PART && cdata.conn_entries(g_start + p_o) != p){
-                        p_o = (p_o + 1) % size;
-                    }
-                cdata.conn_vals(g_start + p_o) += wgt;
-                if(cdata.conn_entries(g_start + p_o) == NULL_PART){
-                    cdata.conn_entries(g_start + p_o) = p;
-                    used_cap++;
-                }
-            }
-            part_t old_size = size;
-            size = used_cap;
-            part_t quarter_size = size / 4;
-            part_t min_inc = 3;
-            if(quarter_size < min_inc) quarter_size = min_inc;
-            size += quarter_size;
-            if(size < old_size){
-                //don't get fancy just redo it with a smaller conn table
-                for(edge_offset_t j = g_start; j < g_start + old_size; j++){
-                    cdata.conn_entries(j) = NULL_PART;
-                    cdata.conn_vals(j) = 0;
-                }
-                for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
-                    ordinal_t v = g.graph.entries(j);
-                    if(constraint(i) != constraint(v)) continue;
-                    gain_t wgt = g.values(j);
-                    part_t p = part(v);
-                    part_t p_o = p % size;
-                        while(cdata.conn_entries(g_start + p_o) != NULL_PART && cdata.conn_entries(g_start + p_o) != p){
+                    bool success = false;
+                    while(!success){
+                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
                             p_o = (p_o + 1) % size;
                         }
-                    cdata.conn_vals(g_start + p_o) += wgt;
-                    if(cdata.conn_entries(g_start + p_o) == NULL_PART){
-                        cdata.conn_entries(g_start + p_o) = p;
+                        if(s_conn_entries[p_o] == p){
+                            success = true;
+                        } else {
+                            Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p);
+                            if(s_conn_entries[p_o] == p){
+                                success = true;
+                            } else {
+                                p_o = (p_o + 1) % size;
+                            }
+                        }
                     }
-                }
-            } else {
-                size = old_size;
-            }
+                Kokkos::atomic_add(s_conn_vals + p_o, wgt);
+            });
             cdata.conn_table_sizes(i) = size;
         });
     } else {

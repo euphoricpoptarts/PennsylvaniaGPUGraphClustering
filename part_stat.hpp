@@ -85,6 +85,7 @@ struct refine_data {
     scalar_t g_deg = 0;
     gain_t cut = 0;
     double mod = -1.0;
+    part_t label_count;
     bool init = false;
 };
 
@@ -181,6 +182,7 @@ static void relabel(part_vt labels, refine_data& rfd){
 	});
     rfd.in_deg = in_deg;
     rfd.total_deg = total_deg;
+    rfd.label_count = t_labels;
 }
 
 static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count, scalar_t g_degree){

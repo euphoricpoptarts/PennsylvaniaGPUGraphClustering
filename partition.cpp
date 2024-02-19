@@ -77,7 +77,15 @@ part_vt connected_comps(matrix_t g, part_vt part){
     return comp_ids;
 }
 
-part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment);
+part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment);
+
+part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
+    part_vt part("cluster assignments", c.mtx.numRows());
+    Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+        part(i) = i;
+    });
+    return rec_part(refiner, part, c, rfd, wdeg, countdown, experiment);
+}
 
 part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
     std::cout << "Pre-refine" << std::endl;
@@ -85,6 +93,7 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
     refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, constraint, rfd, experiment);
     stat::relabel(part, rfd);
     if(countdown > 0){
+        part_t labels = rfd.label_count;
         Kokkos::deep_copy(constraint, part);
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
             part(i) = i;
@@ -93,12 +102,11 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
         refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, constraint, rfd, experiment);
         stat::relabel(part, rfd);
         contracter_t contracter;
-        ordinal_t labels = stat::get_total_labels(part);
-        clt active_clt = contracter.build_coarse_graph(c, part, labels, experiment);
-        wgt_view_t active_wdeg("weighted degree 2", labels);
+        clt active_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
+        wgt_view_t active_wdeg("weighted degree 2", rfd.label_count);
         Kokkos::deep_copy(active_wdeg, rfd.total_deg);
         Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
-        part_vt active_part("active part", labels);
+        part_vt active_part("active part", rfd.label_count);
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
             active_part(part(i)) = constraint(i);
         });
@@ -108,23 +116,12 @@ part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wde
             part(i) = active_part(part(i));
         });
 
-        // labels = stat::get_total_labels(part);
-        // std::cout << "Total labels " << labels << std::endl;
-        // labels = stat::get_total_labels(active_part);
-        // std::cout << "Total labels " << labels << std::endl;
+        // std::cout << "Total labels " << rfd.label_count << std::endl;
         // std::cout << "Post-refine" << std::endl;
         // refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, constraint, rfd, experiment);
         // stat::relabel(part, rfd);
     }
     return part;
-}
-
-part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment){
-    part_vt part("cluster assignments", c.mtx.numRows());
-    Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-        part(i) = i;
-    });
-    return rec_part(refiner, part, c, rfd, wdeg, countdown, experiment);
 }
 
 part_vt partition(value_t& edge_cut,
@@ -154,6 +151,10 @@ part_vt partition(value_t& edge_cut,
     std::cout << "Total labels " << labels << std::endl;
     double modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << std::setprecision(6) << modularity << std::endl;
+    wgt_view_t vtx_w("vertex weights", g.numRows());
+    Kokkos::deep_copy(vtx_w, 1);
+    wgt_view_t part_sizes = stat::get_part_sizes(g, vtx_w, part, labels);
+    std::cout << "Largest part: " << static_cast<double>(stat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
     edge_cut = rfd.cut;
     return part;
 }
@@ -193,12 +194,11 @@ int main(int argc, char **argv) {
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
 
-        part_vt best_part;
         value_t edgecut = 0;
         ExperimentLoggerUtil<value_t> experiment;
         part_vt part = partition(edgecut, g, vweights, experiment);
 
-        if(part_file != nullptr) write_part(best_part, part_file);
+        if(part_file != nullptr) write_part(part, part_file);
     }
     Kokkos::finalize();
 
