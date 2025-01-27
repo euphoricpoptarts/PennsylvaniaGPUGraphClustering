@@ -360,13 +360,15 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
                 part_t p_o = p % size;
                     bool success = false;
                     while(!success){
-                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
+                        part_t px = s_conn_entries[p_o];
+                        while(px != p && px != NULL_PART){
                             p_o = (p_o + 1) % size;
+                            px = s_conn_entries[p_o];
                         }
-                        if(s_conn_entries[p_o] == p){
+                        if(px == p){
                             success = true;
                         } else {
-                            if(Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p)) update++;
+                            if(Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p) == NULL_PART) update++;
                             if(s_conn_entries[p_o] == p){
                                 success = true;
                             } else {
@@ -397,13 +399,15 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
                 part_t p_o = p % size;
                     bool success = false;
                     while(!success){
-                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
+                        part_t px = s_conn_entries[p_o];
+                        while(px != p && px != NULL_PART){
                             p_o = (p_o + 1) % size;
+                            px = s_conn_entries[p_o];
                         }
-                        if(s_conn_entries[p_o] == p){
+                        if(px == p){
                             success = true;
                         } else {
-                            Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p);
+                            Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
                             if(s_conn_entries[p_o] == p){
                                 success = true;
                             } else {
@@ -484,10 +488,12 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
             //insert best into conn table
             //needs to find either HASH_RECLAIM or NULL_PART to make insertion
             while(!success && count < v_size){
-                while(cdata.conn_entries(v_start + p_o) != best && cdata.conn_entries(v_start + p_o) > NULL_PART && count++ < v_size){
+                part_t px = cdata.conn_entries(v_start + p_o);
+                while(px != best && px > NULL_PART && count++ < v_size){
                     p_o = (p_o + 1) % v_size;
+                    px = cdata.conn_entries(v_start + p_o);
                 }
-                if(cdata.conn_entries(v_start + p_o) == best){
+                if(px == best){
                     success = true;
                 } else {
                     part_t orig = NULL_PART;
@@ -506,15 +512,17 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
             if(!success){
                 p_o = v_size;
                 while(!success){
-                    while(cdata.conn_entries(v_start + p_o) != best && cdata.conn_entries(v_start + p_o) > NULL_PART){
+                    part_t px = cdata.conn_entries(v_start + p_o);
+                    while(px != best && px > NULL_PART && count++ < v_size){
                         p_o++;
+                        px = cdata.conn_entries(v_start + p_o);
                     }
-                    if(cdata.conn_entries(v_start + p_o) == best){
+                    if(px == best){
                         success = true;
                     } else {
                         part_t orig = NULL_PART;
                         if(cdata.conn_entries(v_start + p_o) == HASH_RECLAIM) orig = HASH_RECLAIM;
-                        if(Kokkos::atomic_compare_exchange_strong(&cdata.conn_entries(v_start + p_o), orig, best)){
+                        if(Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), orig, best) == orig){
                             Kokkos::atomic_add(&cdata.conn_table_sizes(v), 1);
                         }
                         //don't care if this thread succeeded if another thread succeeded with the same value
@@ -653,7 +661,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
                         if(s_conn_entries[p_o] == p){
                             success = true;
                         } else {
-                            Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p);
+                            Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
                             if(s_conn_entries[p_o] == p){
                                 success = true;
                             } else {
@@ -692,13 +700,15 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
                 part_t p_o = p % size;
                     bool success = false;
                     while(!success){
-                        while(s_conn_entries[p_o] != p && s_conn_entries[p_o] != NULL_PART){
+                        part_t px = s_conn_entries[p_o];
+                        while(px != p && px != NULL_PART){
                             p_o = (p_o + 1) % size;
+                            px = s_conn_entries[p_o];
                         }
-                        if(s_conn_entries[p_o] == p){
+                        if(px == p){
                             success = true;
                         } else {
-                            if(Kokkos::atomic_compare_exchange_strong(s_conn_entries + p_o, NULL_PART, p)) Kokkos::atomic_add(used_cap, 1);
+                            if(Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p) == NULL_PART) Kokkos::atomic_add(used_cap, 1);
                             if(s_conn_entries[p_o] == p){
                                 success = true;
                             } else {
