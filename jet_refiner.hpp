@@ -74,6 +74,9 @@ public:
     using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
     using gain_vt = Kokkos::View<gain_t*, Device>;
     using gain_svt = Kokkos::View<gain_t, Device>;
+    using vtx_pin_st = Kokkos::View<ordinal_t, Kokkos::SharedHostPinnedSpace>;
+    using gain_pin_vt = Kokkos::View<gain_t*, Kokkos::SharedHostPinnedSpace>;
+    using gain_pin_st = Kokkos::View<gain_t, Kokkos::SharedHostPinnedSpace>;
     using part_vt = Kokkos::View<part_t*, Device>;
     using part_svt = Kokkos::View<part_t, Device>;
     using obj_vt = Kokkos::View<float*, Device>;
@@ -121,8 +124,9 @@ struct scratch_mem {
     obj_vt obj1, gain_persistent;
     vtx_view_t vtx1, vtx2, zeros1;
     part_vt dest_part, undersized;
-    gain_svt cut_change1, cut_change2, max_part;
-    gain_vt reduce_locs;
+    vtx_pin_st scan_host;
+    gain_pin_st cut_change1, cut_change2, max_part;
+    gain_pin_vt reduce_locs;
     typename gain_vt::HostMirror reduce_copy;
 
     scratch_mem(const ordinal_t n) {
@@ -133,7 +137,8 @@ struct scratch_mem {
         vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
         dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
         zeros1 = vtx_view_t("zeros 1", n);
-        reduce_locs = gain_vt("reduce to here", 3);
+        scan_host = vtx_pin_st("scan host");
+        reduce_locs = gain_pin_vt("reduce to here", 3);
         reduce_copy = Kokkos::create_mirror_view(reduce_locs);
         cut_change1 = Kokkos::subview(reduce_locs, 0);
         cut_change2 = Kokkos::subview(reduce_locs, 1);
@@ -266,7 +271,9 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             } else if(final){
                 pregain(i) = -100000.0;
             }
-    }, num_pos);
+    }, scratch.scan_host);
+    exec_space().fence();
+    num_pos = scratch.scan_host();
     //truncate scratch views by num_pos
     vtx_view_t pos_moves = Kokkos::subview(swap_scratch, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     vtx_view_t should_swap = Kokkos::subview(scratch.zeros1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
@@ -312,7 +319,9 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
                 }
                 update++;
             }
-    }, num_pos);
+    }, scratch.scan_host);
+    exec_space().fence();
+    num_pos = scratch.scan_host();
     pos_moves = Kokkos::subview(swaps2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     Kokkos::deep_copy(exec_space(), lock_bit, 0);
     Kokkos::parallel_for("set lock bit", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t x){
@@ -606,8 +615,8 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
         gain_update += b_con - p_con;
     }, scratch.cut_change2);
-    Kokkos::deep_copy(exec_space(), scratch.reduce_copy, scratch.reduce_locs);
-    int64_t cut_change = scratch.reduce_copy(1) + scratch.reduce_copy(0);
+    exec_space().fence();
+    int64_t cut_change = scratch.cut_change2() + scratch.cut_change1();
     curr_state.cut -= cut_change;
 } 
 
@@ -793,7 +802,6 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     part_vt part(Kokkos::ViewAllocateWithoutInitializing("current partition"), g.numRows());
     Kokkos::deep_copy(exec_space(), part, best_part);
     conn_data cdata = init_conn_data(perm_cdata, g, part, constraint);
-    int count = 0;
     int iter_count = 0;
     Kokkos::fence();
     Kokkos::Timer iter_t;
@@ -810,6 +818,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     float filter_ratio = 0.5;
     if(best_state.g_deg == g.nnz()) filter_ratio = 0.5;
     bool use_big = true;
+    int count = 0;
     while(count++ <= 11){
         iter_count++;
         if(iter_count > 3) use_big = false;
