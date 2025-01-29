@@ -94,6 +94,7 @@ public:
     struct coarse_level_triple {
         matrix_t mtx;
         wgt_view_t nb_self_loops;
+        wgt_view_t wdeg;
     };
 
     // define behavior-controlling enums
@@ -385,6 +386,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
     timer.reset();
+    edge_offset_t old_size = hash_size;
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
         edge_offset_t val = coarse_row_map_f(i);
         if(final){
@@ -398,7 +400,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse, hrow_map, coarse_row_map_f);
-    if(!is_host_space && hash_size / nc >= 12) {
+    if(!is_host_space && old_size / nc >= 12) {
         Kokkos::parallel_for("consolidate", team_policy_t(nc, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(4*sizeof(ordinal_t))), consolidate);
     } else {
         bool use_dyn = should_use_dyn(nc, hrow_map, exec_space().concurrency());

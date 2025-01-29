@@ -77,46 +77,48 @@ part_vt connected_comps(matrix_t g, part_vt part){
     return comp_ids;
 }
 
-part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint);
-
-part_vt rec_part(ref_t& refiner, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint){
-    part_vt part("cluster assignments", c.mtx.numRows());
-    Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-        part(i) = i;
-    });
-    return rec_part(refiner, part, c, rfd, wdeg, countdown, experiment, constraint);
-}
-
-part_vt rec_part(ref_t& refiner, part_vt part, clt c, rfd_t& rfd, wgt_view_t wdeg, int countdown, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint){
-    std::cout << "Pre-refine" << std::endl;
-    stat::reset_rfd(c.mtx, part, c.nb_self_loops, c.mtx.numRows(), rfd);
-    refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, constraint, rfd, experiment);
-    stat::relabel(part, rfd);
-    if(countdown > 0){
-        part_t labels = rfd.label_count;
-        
-        contracter_t contracter;
-        clt active_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
-        wgt_view_t active_wdeg("weighted degree 2", rfd.label_count);
-        Kokkos::deep_copy(active_wdeg, rfd.total_deg);
-        Kokkos::deep_copy(active_clt.nb_self_loops, rfd.in_deg);
-        part_vt active_constraint("active constraint", rfd.label_count);
-        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-            active_constraint(part(i)) = constraint(i);
+part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, int countdown, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint){
+    std::vector<clt> levels;
+    std::vector<part_vt> parts;
+    levels.push_back(top);
+    for(int i = 0; i < countdown; i++){
+        clt c = levels[i];
+        std::cout << "Pre-refine" << std::endl;
+        part_vt part("cluster assignments", c.mtx.numRows());
+        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = x;
         });
-        //stat::reset_rfd(active_clt.mtx, active_part, active_clt.nb_self_loops, labels, rfd);
-        part_vt active_part = rec_part(refiner, active_clt, rfd, active_wdeg, countdown - 1, experiment, active_constraint);
-        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-            part(i) = active_part(part(i));
+        stat::reset_rfd(c.mtx, part, c.nb_self_loops, c.mtx.numRows(), rfd);
+        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, constraint, rfd, true, experiment);
+        stat::relabel(part, rfd);
+        parts.push_back(part);
+        if(i + 1 < countdown){
+            contracter_t contracter;
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
+            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
+            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
+            Kokkos::deep_copy(next_clt.nb_self_loops, rfd.in_deg);
+            part_vt next_constraint("active constraint", rfd.label_count);
+            Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+                next_constraint(part(x)) = constraint(x);
+            });
+            constraint = next_constraint;
+            levels.push_back(next_clt);
+        }
+    }
+    
+    for(int i = countdown - 2; i >= 0; i--){
+        clt c = levels[i];
+        part_vt coarse_part = parts[i + 1];
+        part_vt part = parts[i];
+        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = coarse_part(part(x));
         });
-
-        // std::cout << "Total labels " << rfd.label_count << std::endl;
-        // std::cout << "Post-refine" << std::endl;
         part_vt big_constraint("big constraint", c.mtx.numRows());
-        refiner.jet_refine(c.mtx, wdeg, c.nb_self_loops, part, big_constraint, rfd, experiment);
+        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, big_constraint, rfd, false, experiment);
         stat::relabel(part, rfd);
     }
-    return part;
+    return parts[0];
 }
 
 part_vt partition(value_t& edge_cut,
@@ -129,23 +131,22 @@ part_vt partition(value_t& edge_cut,
     clt c;
     c.mtx = g;
     c.nb_self_loops = nb_self_loops;
+    c.wdeg = vweights;
     clt active_clt = c;
     Kokkos::fence();
     Kokkos::Timer t;
     part_vt constraint("constraint", g.numRows());
-    part_vt part = rec_part(refiner, c, rfd, vweights, 5, experiment, constraint);
+    part_vt part = rec_part(refiner, c, rfd, 5, experiment, constraint);
     for(int i = 0; i < 4; i++){
-        connected_comps(g, part);
+        //connected_comps(g, part);
         Kokkos::deep_copy(constraint, part);
-        part = rec_part(refiner, c, rfd, vweights, 5, experiment, constraint);
+        part = rec_part(refiner, c, rfd, 5, experiment, constraint);
     }
     Kokkos::fence();
-    part = connected_comps(g, part);
+    //part = connected_comps(g, part);
     std::cout << t.seconds() << std::endl;
     ordinal_t labels = stat::get_total_labels(part);
     stat::reset_rfd(g, part, nb_self_loops, labels, rfd);
-    //part = rec_part(refiner, part, c, rfd, vweights, 2, experiment);
-    //part = connected_comps(g, part);
     std::cout << "Total labels " << labels << std::endl;
     double modularity = stat::modularity(g, part, labels, g.nnz());
     std::cout << "Modularity: " << std::setprecision(6) << modularity << std::endl;
@@ -167,17 +168,13 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <optional partition_output_filename> <optional metrics_filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <optional partition_output_filename>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
     char *part_file = nullptr;
-    char *metrics = nullptr;
     if(argc >= 3){
         part_file = argv[2];
-    }
-    if(argc >= 4){
-        metrics = argv[3];
     }
 
     Kokkos::initialize(argc, argv);
