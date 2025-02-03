@@ -276,55 +276,26 @@ struct countUnique {
 struct consolidateUnique {
     vtx_view_t htable, entries_coarse;
     wgt_view_t hvals, wgts_coarse;
-    edge_view_t hrow_map, coarse_row_map_f;
 
     consolidateUnique(vtx_view_t _htable,
             vtx_view_t _entries_coarse,
             wgt_view_t _hvals,
-            wgt_view_t _wgts_coarse,
-            edge_view_t _hrow_map,
-            edge_view_t _coarse_row_map_f) :
+            wgt_view_t _wgts_coarse) :
             htable(_htable),
             entries_coarse(_entries_coarse),
             hvals(_hvals),
-            wgts_coarse(_wgts_coarse),
-            hrow_map(_hrow_map),
-            coarse_row_map_f(_coarse_row_map_f) {}
+            wgts_coarse(_wgts_coarse) {}
 
     KOKKOS_INLINE_FUNCTION
-        void operator()(const member& thread) const
+        void operator()(const edge_offset_t j, edge_offset_t& update, const bool final) const
     {
-        const ordinal_t i = thread.league_rank();
-        const edge_offset_t start = hrow_map(i);
-        const edge_offset_t end = hrow_map(i + 1);
-        const edge_offset_t write_to = coarse_row_map_f(i);
-        ordinal_t* total = (ordinal_t*) thread.team_shmem().get_shmem(sizeof(ordinal_t));
-        *total = 0;
-        thread.team_barrier();
-        Kokkos::parallel_for(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j){
-            if(htable(j) != -1){
-                //we don't care about the insertion order
-                //this is faster than a scan
-                ordinal_t insert = Kokkos::atomic_fetch_add(total, 1);
-                entries_coarse(write_to + insert) = htable(j);
-                wgts_coarse(write_to + insert) = hvals(j);
+        if(htable(j) != -1){
+            if(final){
+                entries_coarse(update) = htable(j);
+                wgts_coarse(update) = hvals(j);
             }
-        });
-    }
-
-    KOKKOS_INLINE_FUNCTION
-        void operator()(const ordinal_t i) const
-    {
-        const edge_offset_t start = hrow_map(i);
-        const edge_offset_t end = hrow_map(i + 1);
-        edge_offset_t write_to = coarse_row_map_f(i);
-        for (edge_offset_t j = start; j < end; j++){
-            if(htable(j) != -1){
-                entries_coarse(write_to) = htable(j);
-                wgts_coarse(write_to) = hvals(j);
-                write_to++;
-            }
-        };
+            update++;
+        }
     }
 };
 
@@ -399,17 +370,8 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     timer.reset();
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
-    consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse, hrow_map, coarse_row_map_f);
-    if(!is_host_space && old_size / nc >= 12) {
-        Kokkos::parallel_for("consolidate", team_policy_t(nc, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(4*sizeof(ordinal_t))), consolidate);
-    } else {
-        bool use_dyn = should_use_dyn(nc, hrow_map, exec_space().concurrency());
-        if(use_dyn){
-            Kokkos::parallel_for("consolidate", dyn_policy_t(0, nc), consolidate);
-        } else {
-            Kokkos::parallel_for("consolidate", policy_t(0, nc), consolidate);
-        }
-    }
+    consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
+    Kokkos::parallel_scan("consolidate", policy_t(0, old_size), consolidate);
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
