@@ -230,71 +230,56 @@ struct combineAndDedupe {
     }
 };
 
-struct countUnique {
+struct scanUnique {
     vtx_view_t htable;
-    edge_view_t hrow_map, coarse_row_map_f;
+    edge_view_t edge_scan;
+    edge_offset_t last;
 
-    countUnique(vtx_view_t _htable,
-            edge_view_t _hrow_map,
-            edge_view_t _coarse_row_map_f) :
+    scanUnique(vtx_view_t _htable,
+            edge_view_t _edge_scan,
+            edge_offset_t _last) :
             htable(_htable),
-            hrow_map(_hrow_map),
-            coarse_row_map_f(_coarse_row_map_f) {}
+            edge_scan(_edge_scan),
+            last(_last) {}
 
     KOKKOS_INLINE_FUNCTION
-        void operator()(const member& thread) const
+        void operator()(const edge_offset_t j, edge_offset_t& update, const bool final) const
     {
-        const ordinal_t i = thread.league_rank();
-        const edge_offset_t start = hrow_map(i);
-        const edge_offset_t end = hrow_map(i + 1);
-        ordinal_t uniques = 0;
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j, ordinal_t& update){
-            if(htable(j) != -1){
-                update++;
-            }
-        }, uniques);
-        Kokkos::single(Kokkos::PerTeam(thread), [=](){
-            coarse_row_map_f(i) = uniques;
-        });
-    }
-
-    KOKKOS_INLINE_FUNCTION
-        void operator()(const ordinal_t i) const
-    {
-        const edge_offset_t start = hrow_map(i);
-        const edge_offset_t end = hrow_map(i + 1);
-        ordinal_t uniques = 0;
-        for(edge_offset_t j = start; j < end; j++) {
-            if(htable(j) != -1){
-                uniques++;
-            }
+        if(final){
+            edge_scan(j) = update;
         }
-        coarse_row_map_f(i) = uniques;
+        if(htable(j) != -1){
+            update++;
+        }
+        if(final && j == last){
+            edge_scan(last + 1) = update;
+        }
     }
 };
 
 struct consolidateUnique {
     vtx_view_t htable, entries_coarse;
+    edge_view_t edge_scan;
     wgt_view_t hvals, wgts_coarse;
 
     consolidateUnique(vtx_view_t _htable,
             vtx_view_t _entries_coarse,
+            edge_view_t _edge_scan,
             wgt_view_t _hvals,
             wgt_view_t _wgts_coarse) :
             htable(_htable),
             entries_coarse(_entries_coarse),
+            edge_scan(_edge_scan),
             hvals(_hvals),
             wgts_coarse(_wgts_coarse) {}
 
     KOKKOS_INLINE_FUNCTION
-        void operator()(const edge_offset_t j, edge_offset_t& update, const bool final) const
+        void operator()(const edge_offset_t j) const
     {
         if(htable(j) != -1){
-            if(final){
-                entries_coarse(update) = htable(j);
-                wgts_coarse(update) = hvals(j);
-            }
-            update++;
+            edge_offset_t insert = edge_scan(j);
+            entries_coarse(insert) = htable(j);
+            wgts_coarse(insert) = hvals(j);
         }
     }
 };
@@ -347,31 +332,25 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Dedupe, timer.seconds());
     timer.reset();
+    edge_view_t edge_scan("edge scan", hash_size + 1);
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    countUnique cu(htable, hrow_map, coarse_row_map_f);
-    if(!is_host_space && hash_size / nc >= 12) {
-        Kokkos::parallel_for("count unique", team_policy_t(nc, Kokkos::AUTO), cu);
-    } else {
-        Kokkos::parallel_for("count unique", policy_t(0, nc), cu);
-    }
+    scanUnique scan_it(htable, edge_scan, hash_size - 1);
+    edge_offset_t old_size = hash_size;
+    Kokkos::parallel_scan("scan unique", policy_t(0, hash_size), scan_it, hash_size);
     Kokkos::fence();
     experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
     timer.reset();
-    edge_offset_t old_size = hash_size;
-    Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
-        edge_offset_t val = coarse_row_map_f(i);
-        if(final){
-            coarse_row_map_f(i) = update;
-        }
-        update += val;
-    }, hash_size);
+    Kokkos::parallel_for("read offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i){
+        edge_offset_t read = hrow_map(i);
+        coarse_row_map_f(i) = edge_scan(read);
+    });
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Prefix, timer.seconds());
     timer.reset();
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
-    consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
-    Kokkos::parallel_scan("consolidate", policy_t(0, old_size), consolidate);
+    consolidateUnique consolidate(htable, entries_coarse, edge_scan, hvals, wgts_coarse);
+    Kokkos::parallel_for("consolidate", policy_t(0, old_size), consolidate);
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
