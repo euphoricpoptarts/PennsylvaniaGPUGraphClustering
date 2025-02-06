@@ -77,22 +77,22 @@ part_vt connected_comps(matrix_t g, part_vt part){
     return comp_ids;
 }
 
-part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, int countdown, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint){
+part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, part_vt constraint){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
-    for(int i = 0; i < countdown; i++){
-        clt c = levels[i];
+    while(true) {
+        clt c = levels[levels.size() - 1];
         std::cout << "Pre-refine" << std::endl;
         part_vt part("cluster assignments", c.mtx.numRows());
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        stat::reset_rfd(c.mtx, part, c.nb_self_loops, c.mtx.numRows(), rfd);
+        rfd.init = false;
         refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, constraint, rfd, true, experiment);
         stat::relabel(part, rfd);
         parts.push_back(part);
-        if(i + 1 < countdown){
+        if(rfd.label_count < c.mtx.numRows()){
             contracter_t contracter;
             clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
@@ -104,10 +104,12 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, int countdown, ExperimentL
             });
             constraint = next_constraint;
             levels.push_back(next_clt);
+        } else {
+            break;
         }
     }
     
-    for(int i = countdown - 2; i >= 0; i--){
+    for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
         part_vt coarse_part = parts[i + 1];
         part_vt part = parts[i];
@@ -136,11 +138,11 @@ part_vt partition(value_t& edge_cut,
     Kokkos::fence();
     Kokkos::Timer t;
     part_vt constraint("constraint", g.numRows());
-    part_vt part = rec_part(refiner, c, rfd, 5, experiment, constraint);
-    for(int i = 0; i < 4; i++){
+    part_vt part = rec_part(refiner, c, rfd, experiment, constraint);
+    for(int i = 0; i < 2; i++){
         //connected_comps(g, part);
         Kokkos::deep_copy(constraint, part);
-        part = rec_part(refiner, c, rfd, 5, experiment, constraint);
+        part = rec_part(refiner, c, rfd, experiment, constraint);
     }
     Kokkos::fence();
     //part = connected_comps(g, part);
