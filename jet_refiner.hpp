@@ -289,33 +289,62 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     //is reevaluated by considering the effect of the other potential moves
     //a move is considered to occur before another according to their potential gains
     //and the vertex ids
-    Kokkos::parallel_for("afterburner heuristic", dyn_team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        float change = 0;
-        ordinal_t i = pos_moves(t.league_rank());
-        part_t best = dest_part(i);
-        part_t p = part(i);
-        float igain = pregain(i);
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
-            ordinal_t v = g.graph.entries(j);
-            float vgain = pregain(v);
-            //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && v < i)){
-                part_t vpart = dest_part(v);
-                scalar_t wgt = g.values(j);
-                    update -= (vpart == p) ? wgt : 0;
-                    update += (vpart == best) ? wgt : 0;
-                vpart = part(v);
-                    update += (vpart == p) ? wgt : 0;
-                    update -= (vpart == best) ? wgt : 0;
+    if(prob.use_team){
+        Kokkos::parallel_for("afterburner heuristic", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+            float change = 0;
+            ordinal_t i = pos_moves(t.league_rank());
+            part_t best = dest_part(i);
+            part_t p = part(i);
+            float igain = pregain(i);
+            ordinal_t hi = hash(i);
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
+                ordinal_t v = g.graph.entries(j);
+                float vgain = pregain(v);
+                //adjust local gain if v has higher priority than i
+                if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+                    part_t vpart = dest_part(v);
+                    scalar_t wgt = g.values(j);
+                        update -= (vpart == p) ? wgt : 0;
+                        update += (vpart == best) ? wgt : 0;
+                    vpart = part(v);
+                        update += (vpart == p) ? wgt : 0;
+                        update -= (vpart == best) ? wgt : 0;
+                }
+            }, change);
+            t.team_barrier();
+            Kokkos::single(Kokkos::PerTeam(t), [&](){
+                if(igain + 2*change > 0){
+                    should_swap(t.league_rank()) = 1;
+                }
+            });
+        });
+    } else {
+        Kokkos::parallel_for("afterburner heuristic", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t& x){
+            float change = 0;
+            ordinal_t i = pos_moves(x);
+            part_t best = dest_part(i);
+            part_t p = part(i);
+            float igain = pregain(i);
+            ordinal_t hi = hash(i);
+            for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+                ordinal_t v = g.graph.entries(j);
+                float vgain = pregain(v);
+                //adjust local gain if v has higher priority than i
+                if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+                    part_t vpart = dest_part(v);
+                    scalar_t wgt = g.values(j);
+                    change -= (vpart == p) ? wgt : 0;
+                    change += (vpart == best) ? wgt : 0;
+                    vpart = part(v);
+                    change += (vpart == p) ? wgt : 0;
+                    change -= (vpart == best) ? wgt : 0;
+                }
             }
-        }, change);
-        t.team_barrier();
-        Kokkos::single(Kokkos::PerTeam(t), [&](){
             if(igain + 2*change >= 0){
-                should_swap(t.league_rank()) = 1;
+                should_swap(x) = 1;
             }
         });
-    });
+    }
     vtx_view_t swaps2 = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
