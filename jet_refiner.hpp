@@ -114,11 +114,13 @@ struct problem {
     part_vt constraint;
     ordinal_t opt;
     ordinal_t size_max;
+    bool use_team = true;
 };
 
 //vertex-part connectivity data
 struct conn_data {
     gain_vt conn_vals;
+    gain_vt pvals;
     edge_view_t conn_offsets;
     vtx_view_t lock_bit;
     part_vt dest_cache;
