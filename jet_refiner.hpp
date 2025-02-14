@@ -842,13 +842,13 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
             part_t size = g_end - g_start;
             part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
             gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j){
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j, gain_t& update){
                 ordinal_t v = g.graph.entries(j);
                 if(constraint(i) != constraint(v)) return;
                 gain_t wgt = g.values(j);
                 part_t p = part(v);
                 if(p == part(i)){
-                    Kokkos::atomic_add(&cdata.pvals(i), wgt);
+                    update += wgt;
                     return;
                 }
                 part_t p_o = hash(p) % static_cast<uint32_t>(size);
@@ -871,7 +871,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
                     }
                 }
                 Kokkos::atomic_add(s_conn_vals + p_o, wgt);
-            });
+            }, cdata.pvals(i));
             cdata.conn_table_sizes(i) = size;
         });
     } else {
