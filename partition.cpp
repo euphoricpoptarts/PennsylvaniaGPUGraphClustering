@@ -81,6 +81,7 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
+    rfd.init = false;
     while(true) {
         clt c = levels[levels.size() - 1];
         std::cout << "Pre-refine" << std::endl;
@@ -88,7 +89,6 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        rfd.init = false;
         refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, constraint, rfd, true, experiment);
         stat::relabel(part, rfd);
         parts.push_back(part);
