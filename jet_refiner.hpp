@@ -122,7 +122,7 @@ struct problem {
 //vertex-part connectivity data
 struct conn_data {
     gain_vt conn_vals;
-    gain_vt pvals;
+    gain_vt pvals, bvals;
     edge_view_t conn_offsets;
     vtx_view_t lock_bit;
     part_vt dest_cache;
@@ -134,7 +134,7 @@ struct conn_data {
 struct scratch_mem {
     gain_vt gain1;
     obj_vt obj1, gain_persistent;
-    vtx_view_t vtx1, vtx2, zeros1;
+    vtx_view_t vtx1, vtx2, vtx3, zeros1;
     part_vt dest_part, undersized;
     vtx_pin_st scan_host;
     gain_pin_st cut_change1, cut_change2, max_part;
@@ -147,6 +147,7 @@ struct scratch_mem {
         gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
         vtx1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
         vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
+        vtx3 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 3"), n);
         dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
         zeros1 = vtx_view_t("zeros 1", n);
         scan_host = vtx_pin_st("scan host");
@@ -178,6 +179,7 @@ struct scratch_mem {
         edge_offset_t gain_size = count_gain_size(largest);
         perm_cdata.conn_vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("conn vals"), gain_size);
         perm_cdata.pvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals"), n);
+        perm_cdata.bvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("b vals"), n);
         perm_cdata.conn_entries = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn entries"), gain_size);
         perm_cdata.conn_offsets = conn_offsets;
         perm_cdata.dest_cache = part_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
@@ -205,17 +207,18 @@ refine_data clone_refine_data(refine_data& rhs){
 
 //determines which vertices (if any) should be moved to another part to decrease cutsize
 //8 kernels, 2 device-host syncs
-vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& rfd, const conn_data& cdata, scratch_mem& scratch, float filter_ratio){
+vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& rfd, const conn_data& cdata, scratch_mem& scratch, float filter_ratio, bool initial){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
-    vtx_view_t swap_scratch = scratch.vtx1;
     part_vt dest_part = scratch.dest_part;
     part_vt conn_entries = cdata.conn_entries;
     edge_view_t conn_offsets = cdata.conn_offsets;
     gain_vt conn_vals = cdata.conn_vals;
     obj_vt save_gains = scratch.gain_persistent;
     vtx_view_t lock_bit = cdata.lock_bit;
+    gain_vt total_deg = rfd.total_deg;
+    gain_vt wdeg = prob.wdeg;
     float inv_2m = 1.0 / static_cast<float>(rfd.g_deg);
     ordinal_t cutoff = 128;
     Kokkos::parallel_scan("filter out locked and find large tables", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
@@ -240,8 +243,9 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
         }
         part_t p = part(i);
         part_t best = p;
-        float wd = prob.wdeg(i);
+        float wd = wdeg(i);
         float b_conn = -100000.0;
+        gain_t bval = 0;
         float multi = wd*inv_2m;
         edge_offset_t start = conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
@@ -251,22 +255,24 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             float j_conn = conn_vals(j);
             if(j_conn > 0){
                 part_t px = conn_entries(j);
-                j_conn -= static_cast<float>(rfd.total_deg(px))*multi;
+                j_conn -= static_cast<float>(total_deg(px))*multi;
                 if(j_conn > b_conn){
                     b_conn = j_conn;
+                    bval = conn_vals(j);
                     best = px;
                 }
             }
         }
         save_gains(i) = 0;
         if(best != p){
-            float p_conn = cdata.pvals(i) - (rfd.total_deg(p) - wd)*multi;
+            float p_conn = cdata.pvals(i) - (total_deg(p) - wd)*multi;
             float limit = p_conn - filter_ratio*(p_conn);
             // vertices must pass this filter in order to be considered further
             // b_conn >= p_conn may seem redundant but it is important
             // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
             if(b_conn >= p_conn || (b_conn >= limit)){
                 save_gains(i) = b_conn - p_conn;
+                cdata.bvals(i) = bval;
             } else {
                 best = p;
             }
@@ -277,7 +283,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     });
     Kokkos::parallel_for("select destination part (large tables)", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = large_tables(t.league_rank());
-        float wd = prob.wdeg(i);
+        float wd = wdeg(i);
         float multi = wd*inv_2m;
         edge_offset_t start = conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
@@ -288,7 +294,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             float j_conn = conn_vals(j);
             if(j_conn > 0){
                 part_t px = conn_entries(j);
-                j_conn -= static_cast<float>(rfd.total_deg(px))*multi;
+                j_conn -= static_cast<float>(total_deg(px))*multi;
                 if(j_conn > local.val){
                     local.val = j_conn;
                     local.loc = j;
@@ -303,13 +309,14 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
             if(am.loc >= start && am.loc < end){
                 float b_conn = am.val;
                 best = conn_entries(am.loc);
-                float p_conn = cdata.pvals(i) - (rfd.total_deg(p) - wd)*multi;
+                float p_conn = cdata.pvals(i) - (total_deg(p) - wd)*multi;
                 float limit = p_conn - filter_ratio*(p_conn);
                 // vertices must pass this filter in order to be considered further
                 // b_conn >= p_conn may seem redundant but it is important
                 // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
                 if(b_conn >= p_conn || (b_conn >= limit)){
                     save_gains(i) = b_conn - p_conn;
+                    cdata.bvals(i) = conn_vals(am.loc);
                 } else {
                     best = p;
                 }
@@ -325,6 +332,7 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     obj_vt pregain = scratch.obj1;
     //write all unlocked vertices that passed the above filter into an unordered list
     //output count of such vertices into num_pos
+    vtx_view_t swap_scratch = scratch.vtx3;
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         part_t p = part(i);
         part_t best = dest_part(i);
@@ -347,68 +355,88 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     //is reevaluated by considering the effect of the other potential moves
     //a move is considered to occur before another according to their potential gains
     //and the vertex ids
-    if(prob.use_team){
-        Kokkos::parallel_for("afterburner heuristic", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-            float change = 0;
-            ordinal_t i = pos_moves(t.league_rank());
-            part_t best = dest_part(i);
-            part_t p = part(i);
-            float igain = pregain(i);
-            ordinal_t hi = hash(i);
-            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
-                ordinal_t v = g.graph.entries(j);
-                float vgain = pregain(v);
-                //adjust local gain if v has higher priority than i
-                if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
-                    part_t vpart = dest_part(v);
-                    scalar_t wgt = g.values(j);
-                        update -= (vpart == p) ? wgt : 0;
-                        update += (vpart == best) ? wgt : 0;
-                    vpart = part(v);
-                        update += (vpart == p) ? wgt : 0;
-                        update -= (vpart == best) ? wgt : 0;
-                }
-            }, change);
-            t.team_barrier();
-            Kokkos::single(Kokkos::PerTeam(t), [&](){
-                if(igain + change > 0){
-                    lock_bit(i) = 1;
-                }
-            });
-        });
-    } else {
-        Kokkos::parallel_for("afterburner heuristic", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t& x){
-            float change = 0;
-            ordinal_t i = pos_moves(x);
-            part_t best = dest_part(i);
-            part_t p = part(i);
-            float igain = pregain(i);
-            ordinal_t hi = hash(i);
-            for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
-                ordinal_t v = g.graph.entries(j);
-                float vgain = pregain(v);
-                //adjust local gain if v has higher priority than i
-                if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
-                    part_t vpart = dest_part(v);
-                    scalar_t wgt = g.values(j);
-                    change -= (vpart == p) ? wgt : 0;
-                    change += (vpart == best) ? wgt : 0;
-                    vpart = part(v);
-                    change += (vpart == p) ? wgt : 0;
-                    change -= (vpart == best) ? wgt : 0;
-                }
+    ordinal_t big = 0;
+    cutoff = 128;
+    Kokkos::parallel_scan("filter out locked and find large tables", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
+        ordinal_t i = pos_moves(x);
+        if(g.graph.row_map(i+1) - g.graph.row_map(i) > cutoff){
+            if(final){
+                scratch.vtx1(update) = i;
             }
-            if(igain + change >= 0){
+            update++;
+        } else if(final){
+            scratch.vtx2(x - update) = i;
+        }
+    }, big);
+    vtx_view_t big_rows = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), big));
+    vtx_view_t small_rows = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos - big));
+    Kokkos::parallel_for("afterburner heuristic", team_policy_t(big, 256), KOKKOS_LAMBDA(const member& t){
+        float change = 0;
+        ordinal_t i = big_rows(t.league_rank());
+        part_t best = dest_part(i);
+        part_t p = part(i);
+        float wd = prob.wdeg(i);
+        float multi = wd*inv_2m;
+        float igain = pregain(i);
+        ordinal_t hi = hash(i);
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
+            ordinal_t v = g.graph.entries(j);
+            float vgain = pregain(v);
+            //adjust local gain if v has higher priority than i
+            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+                part_t vpart = dest_part(v);
+                scalar_t wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                update -= (vpart == p) ? q : 0;
+                update += (vpart == best) ? q : 0;
+                vpart = part(v);
+                update += (vpart == p) ? q : 0;
+                update -= (vpart == best) ? q : 0;
+            }
+        }, change);
+        t.team_barrier();
+        Kokkos::single(Kokkos::PerTeam(t), [&](){
+            if(igain + change > 0){
                 lock_bit(i) = 1;
             }
         });
-    }
+    });
+    Kokkos::parallel_for("afterburner heuristic", policy_t(0, num_pos - big), KOKKOS_LAMBDA(const ordinal_t& x){
+        float change = 0;
+        ordinal_t i = small_rows(x);
+        part_t best = dest_part(i);
+        part_t p = part(i);
+        float wd = prob.wdeg(i);
+        float multi = wd*inv_2m;
+        float igain = pregain(i);
+        ordinal_t hi = hash(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+            ordinal_t v = g.graph.entries(j);
+            float vgain = pregain(v);
+            //adjust local gain if v has higher priority than i
+            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+                part_t vpart = dest_part(v);
+                scalar_t wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                change -= (vpart == p) ? q : 0;
+                change += (vpart == best) ? q : 0;
+                vpart = part(v);
+                change += (vpart == p) ? q : 0;
+                change -= (vpart == best) ? q : 0;
+            }
+        }
+        if(igain + change >= 0){
+            lock_bit(i) = 1;
+        }
+    });
     vtx_view_t swaps2 = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(lock_bit(pos_moves(i))){
             if(final){
                 swaps2(update) = pos_moves(i);
+                // don't maintain locks in coarsening phase
+                if(initial) lock_bit(pos_moves(i)) = 0;
             }
             update++;
         }
@@ -429,6 +457,7 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
     Kokkos::parallel_for("mark adjacent", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = swaps(t.league_rank());
         swap_bit(i) = 1;
+        cdata.dest_cache(i) = NULL_PART;
         //mark adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
@@ -497,50 +526,6 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             }
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, cdata.pvals(i));
-        t.team_barrier();
-        part_t old_size = size;
-        size = *used_cap;
-        part_t quarter_size = size / 4;
-        part_t min_inc = 3;
-        if(quarter_size < min_inc) quarter_size = min_inc;
-        size += quarter_size;
-        if(size < old_size){
-            //don't get fancy just redo it with a smaller conn table
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
-                cdata.conn_entries(j) = NULL_PART;
-                cdata.conn_vals(j) = 0;
-            });
-            t.team_barrier();
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j){
-                ordinal_t v = g.graph.entries(j);
-                if(constraint(i) != constraint(v)) return;
-                gain_t wgt = g.values(j);
-                part_t p = part(v);
-                if(p == p_i) return;
-                part_t p_o = hash(p) % static_cast<uint32_t>(size);
-                    bool success = false;
-                    while(!success){
-                        part_t px = s_conn_entries[p_o];
-                        while(px != p && px != NULL_PART){
-                            p_o = (p_o + 1) % size;
-                            px = s_conn_entries[p_o];
-                        }
-                        if(px == p){
-                            success = true;
-                        } else {
-                            Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                            if(s_conn_entries[p_o] == p){
-                                success = true;
-                            } else {
-                                p_o = (p_o + 1) % size;
-                            }
-                        }
-                    }
-                Kokkos::atomic_add(s_conn_vals + p_o, wgt);
-            });
-        } else {
-            size = old_size;
-        }
         cdata.conn_table_sizes(i) = size;
     });
 }
@@ -757,10 +742,11 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part_t p = part(i);
         edge_offset_t start = cdata.conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
-        //edges of this vertex in p before moving
+        // edges of this vertex in p before moving
         gain_t p_con = cdata.pvals(i);
-        //edges of this vertex in best before moving
-        gain_t b_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, best, size);
+        // edges of this vertex in best before moving
+        // this is stored by an earlier lookup because the lookup is very expensive for the initial pass (the hashtables don't function as hashtables in the initial pass)
+        gain_t b_con = cdata.bvals(i);
         Kokkos::atomic_add(&curr_state.in_deg(p), -p_con);
         Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
         gain_update += b_con - p_con;
@@ -800,6 +786,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         edge_offset_t start = cdata.conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
         //edges of other vertices in p connecting to this vertex after moving
+        // this lookup is cheaper now since the hashtables should be less full
         gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
         //edges of other vertices in best connecting to this vertex after moving
         gain_t b_con = cdata.pvals(i);
@@ -830,6 +817,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, cons
     }, gain_size);
     cdata.conn_vals = Kokkos::subview(scratch_cdata.conn_vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.pvals = Kokkos::subview(scratch_cdata.pvals, std::make_pair(static_cast<ordinal_t>(0), n));
+    cdata.bvals = Kokkos::subview(scratch_cdata.bvals, std::make_pair(static_cast<ordinal_t>(0), n));
     cdata.conn_entries = Kokkos::subview(scratch_cdata.conn_entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.dest_cache = Kokkos::subview(scratch_cdata.dest_cache, std::make_pair(static_cast<ordinal_t>(0), n));
     cdata.conn_table_sizes = Kokkos::subview(scratch_cdata.conn_table_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -955,7 +943,8 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
             iter_count++;
             if(iter_count > 3) use_big = false;
             vtx_view_t moves;
-            moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio);
+            moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio, true);
+            if(moves.extent(0) == 0) return;
             perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
             curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
             std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
