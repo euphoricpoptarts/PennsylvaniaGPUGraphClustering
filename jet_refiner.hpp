@@ -447,38 +447,44 @@ vtx_view_t jet_lp(const problem& prob, const part_vt& part, const refine_data& r
     return pos_moves;
 }
 
-//updates datastructures assuming a "large" number of vertices are moved
-//2 kernels, 0 device-host syncs
+// updates datastructures assuming a "large" number of vertices are moved
 void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scratch_mem& scratch, conn_data& cdata){
     const matrix_t& g = prob.g;
     const part_vt& constraint = prob.constraint;
     ordinal_t total_moves = swaps.extent(0);
     vtx_view_t swap_bit = scratch.zeros1;
-    Kokkos::parallel_for("mark adjacent", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = swaps(t.league_rank());
+    Kokkos::parallel_for("mark", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
+        ordinal_t i = swaps(x);
         swap_bit(i) = 1;
-        cdata.dest_cache(i) = NULL_PART;
+    });
+    // usually, but not always, faster than directly marking adjacencies of moved vertices, since we can break out of the loop
+    // also can't use a team here because we need to be able to exit the loop early
+    Kokkos::parallel_for("check adjacent", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+        if(swap_bit(i) == 1) return;
         //mark adjacent vertices
-        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
             ordinal_t v = g.graph.entries(j);
-            cdata.dest_cache(v) = NULL_PART;
-            swap_bit(v) = 1;
-        });
+            if(swap_bit(v) == 1){
+                swap_bit(i) = 2;
+                break;
+            }
+        }
     });
     ordinal_t total = 0;
-    Kokkos::parallel_scan("find swapped", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+    Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(swap_bit(i)){
             if(final){
                 scratch.vtx1(update) = i;
                 // reset to zero for next iteration
                 swap_bit(i) = 0;
+                cdata.dest_cache(i) = NULL_PART;
             }
             update++;
         }
     }, total);
     vtx_view_t affected = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
     //recompute conn tables for each vertex adjacent to a moved vertex
-    Kokkos::parallel_for("reset conn DS", team_policy_t(total, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(4*sizeof(part_t))), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("reset conn DS", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         const ordinal_t i = affected(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
@@ -487,8 +493,6 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             cdata.conn_vals(j) = 0;
         });
         part_t size = g_end - g_start;
-        part_t* used_cap = (part_t*) t.team_shmem().get_shmem(sizeof(part_t));
-        *used_cap = 0;
         part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
         gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
         cdata.pvals(i) = 0;
@@ -516,7 +520,6 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
                     success = true;
                 } else {
                     px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(px == NULL_PART) Kokkos::atomic_add(used_cap, 1);
                     if(px == p || px == NULL_PART){
                         success = true;
                     } else {
@@ -526,7 +529,6 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             }
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, cdata.pvals(i));
-        cdata.conn_table_sizes(i) = size;
     });
 }
 
@@ -752,7 +754,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         gain_update += b_con - p_con;
     }, scratch.cut_change1);
     //change part assignments and update part sizes
-    if(use_big || total_moves >= prob.g.numRows() * 0.2){
+    if(use_big || total_moves >= prob.g.numRows() * 0.1){
         Kokkos::parallel_for("perform moves", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
             part_t p = part(i);
