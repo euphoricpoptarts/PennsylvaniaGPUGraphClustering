@@ -135,7 +135,7 @@ struct scratch_mem {
     gain_vt gain1;
     obj_vt obj1, gain_persistent;
     vtx_view_t vtx1, vtx2, vtx3, zeros1;
-    part_vt dest_part, undersized;
+    part_vt part, dest_part, undersized;
     vtx_pin_st scan_host;
     gain_pin_st cut_change1, cut_change2, max_part;
     gain_pin_vt reduce_locs;
@@ -149,6 +149,7 @@ struct scratch_mem {
         vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
         vtx3 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 3"), n);
         dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
+        part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
         zeros1 = vtx_view_t("zeros 1", n);
         scan_host = vtx_pin_st("scan host");
         reduce_locs = gain_pin_vt("reduce to here", 3);
@@ -742,15 +743,13 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         ordinal_t i = swaps(x);
         part_t best = dest_part(i);
         part_t p = part(i);
-        edge_offset_t start = cdata.conn_offsets(i);
-        part_t size = cdata.conn_table_sizes(i);
         // edges of this vertex in p before moving
         gain_t p_con = cdata.pvals(i);
         // edges of this vertex in best before moving
         // this is stored by an earlier lookup because the lookup is very expensive for the initial pass (the hashtables don't function as hashtables in the initial pass)
         gain_t b_con = cdata.bvals(i);
-        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con);
-        Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
+        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con - nb_self_loops(i));
+        Kokkos::atomic_add(&curr_state.in_deg(best), b_con + nb_self_loops(i));
         gain_update += b_con - p_con;
     }, scratch.cut_change1);
     //change part assignments and update part sizes
@@ -764,8 +763,6 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
             dest_part(i) = p;
             Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
             Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
-            Kokkos::atomic_add(&curr_state.in_deg(p), -nb_self_loops(i));
-            Kokkos::atomic_add(&curr_state.in_deg(best), nb_self_loops(i));
         });
         update_large(prob, part, swaps, scratch, cdata);
     } else {
@@ -776,8 +773,6 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
             cdata.dest_cache(i) = NULL_PART;
             Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
             Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
-            Kokkos::atomic_add(&curr_state.in_deg(p), -nb_self_loops(i));
-            Kokkos::atomic_add(&curr_state.in_deg(best), nb_self_loops(i));
         });
         update_small(prob, part, swaps, dest_part, cdata);
     }
@@ -802,7 +797,9 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
 } 
 
 //initializes datastructures
-conn_data init_conn_data(const conn_data& scratch_cdata, const matrix_t& g, const part_vt& part, const part_vt& constraint, bool is_initial){
+conn_data init_conn_data(const conn_data& scratch_cdata, problem& prob, const part_vt& part, bool is_initial){
+    const matrix_t g = prob.g;
+    const part_vt constraint = prob.constraint;
     ordinal_t n = g.numRows();
     conn_data cdata;
     cdata.conn_offsets = Kokkos::subview(scratch_cdata.conn_offsets, std::make_pair(static_cast<ordinal_t>(0), n + 1));
@@ -920,51 +917,44 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     prob.wdeg = wdeg;
     prob.nb_self_loops = nb_self_loops;
     prob.constraint = constraint;
+    prob.use_team = (g.nnz() / g.numRows() >= 8);
     refine_data curr_state = clone_refine_data(best_state);
-    part_vt part(Kokkos::ViewAllocateWithoutInitializing("current partition"), g.numRows());
+    part_vt part = Kokkos::subview(scratch.part, std::make_pair(static_cast<ordinal_t>(0), static_cast<ordinal_t>(g.numRows())));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    conn_data cdata = init_conn_data(perm_cdata, g, part, constraint, is_initial);
+    conn_data cdata = init_conn_data(perm_cdata, prob, part, is_initial);
     int iter_count = 0;
     Kokkos::fence();
     Kokkos::Timer iter_t;
-    double tol = 1;//0.999;
-#ifdef FOUR9
-    tol = 0.9999;
-#elif defined TWO9
-    tol = 0.99;
-#endif
     //repeat until 12 phases since a significant
     //improvement in cut or balance
     //this accounts for at least 3 full lp+rebalancing cycles
-    float filter_ratio = 0.5;
-    if(best_state.g_deg == g.nnz()) filter_ratio = 0.5;
+    float filter_ratio = 0.75;
     bool use_big = true;
-//    for(filter_ratio = 0.95; filter_ratio >= 0; filter_ratio -= 0.05){
-        int count = 0;
-        while(count++ <= 5){
-            iter_count++;
-            if(iter_count > 3) use_big = false;
-            vtx_view_t moves;
-            moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio, true);
-            if(moves.extent(0) == 0) return;
-            perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
-            curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
-            std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
-            //copy current partition and relevant data to output partition if following conditions pass
-            if(curr_state.mod > best_state.mod){
-                //do not reset counter if cut improvement is too small
-                if(curr_state.mod > tol*best_state.mod){
-                    // count = 0;
-                }
-                copy_refine_data(best_state, curr_state);
-                Kokkos::deep_copy(exec_space(), best_part, part);
-            }
+    int big_limit = 2;
+    int limit = 6;
+    bool skip = true;
+    // if(g.nnz() == best_state.g_deg && is_initial) limit = 5;
+    if(!is_initial) big_limit = 0;
+    int count = 0;
+    while(count++ < limit){
+        iter_count++;
+        if(iter_count > big_limit) use_big = false;
+        vtx_view_t moves;
+        moves = jet_lp(prob, part, curr_state, cdata, scratch, filter_ratio, skip);
+        if(moves.extent(0) == 0) return;
+        perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
+        curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
+        // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
+        //copy current partition and relevant data to output partition if following conditions pass
+        if(curr_state.mod > best_state.mod){
+            copy_refine_data(best_state, curr_state);
+            Kokkos::deep_copy(exec_space(), best_part, part);
         }
-    // }
+    }
     Kokkos::fence();
     //divide cut by 2 because each cut edge is counted from both sides
     typename ExperimentLoggerUtil<scalar_t>::CoarseLevel cl(best_state.cut / 2, 0, g.nnz(), g.numRows(), y.seconds(), iter_t.seconds(), iter_count, iter_count);
-    std::cout << "Avg iteration time: " << (iter_t.seconds() / iter_count) << std::endl;
+    // std::cout << "Avg iteration time: " << (iter_t.seconds() / iter_count) << std::endl;
     experiment.addCoarseLevel(cl);
     y.reset();
     iter_t.reset();
