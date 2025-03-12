@@ -232,52 +232,46 @@ struct combineAndDedupe {
 
 struct scanUnique {
     vtx_view_t htable;
-    edge_view_t edge_scan;
-    edge_offset_t last;
 
-    scanUnique(vtx_view_t _htable,
-            edge_view_t _edge_scan,
-            edge_offset_t _last) :
-            htable(_htable),
-            edge_scan(_edge_scan),
-            last(_last) {}
+    scanUnique(vtx_view_t _htable) :
+            htable(_htable) {}
 
     KOKKOS_INLINE_FUNCTION
         void operator()(const edge_offset_t j, edge_offset_t& update, const bool final) const
     {
-        if(final){
-            edge_scan(j) = update;
-        }
-        if(htable(j) != -1){
+        if(htable(j) == -1){
             update++;
-        }
-        if(final && j == last){
-            edge_scan(last + 1) = update;
+            if(final){
+                htable(j) = -update;
+            }
         }
     }
 };
 
 struct consolidateUnique {
     vtx_view_t htable, entries_coarse;
-    edge_view_t edge_scan;
     wgt_view_t hvals, wgts_coarse;
 
     consolidateUnique(vtx_view_t _htable,
             vtx_view_t _entries_coarse,
-            edge_view_t _edge_scan,
             wgt_view_t _hvals,
             wgt_view_t _wgts_coarse) :
             htable(_htable),
             entries_coarse(_entries_coarse),
-            edge_scan(_edge_scan),
             hvals(_hvals),
             wgts_coarse(_wgts_coarse) {}
 
     KOKKOS_INLINE_FUNCTION
         void operator()(const edge_offset_t j) const
     {
-        if(htable(j) != -1){
-            edge_offset_t insert = edge_scan(j);
+        if(htable(j) >= 0){
+            edge_offset_t insert = j;
+            for(edge_offset_t x = j - 1; x >= 0; x--){
+                if(htable(x) < 0){
+                    insert = j + htable(x);
+                    break;
+                }
+            }
             entries_coarse(insert) = htable(j);
             wgts_coarse(insert) = hvals(j);
         }
@@ -294,7 +288,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
 
     Kokkos::Timer timer;
     edge_view_t hrow_map("hashtable row map", nc + 1);
-    wgt_view_t c_vtx_w = wgt_view_t("coarse self loop counts", nc);
     countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
     Kokkos::fence();
@@ -332,30 +325,38 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Dedupe, timer.seconds());
     timer.reset();
-    edge_view_t edge_scan("edge scan", hash_size + 1);
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    scanUnique scan_it(htable, edge_scan, hash_size - 1);
+    scanUnique scan_it(htable);
     edge_offset_t old_size = hash_size;
-    Kokkos::parallel_scan("scan unique", policy_t(0, hash_size), scan_it, hash_size);
+    edge_offset_t unused = 0;
+    Kokkos::parallel_scan("scan unused", policy_t(0, hash_size), scan_it, unused);
+    hash_size = hash_size - unused;
     Kokkos::fence();
     experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
     timer.reset();
     Kokkos::parallel_for("read offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i){
         edge_offset_t read = hrow_map(i);
-        coarse_row_map_f(i) = edge_scan(read);
+        edge_offset_t offset = read;
+        for(edge_offset_t x = read - 1; x >= 0; x--){
+            if(htable(x) < 0){
+                offset = read + htable(x);
+                break;
+            }
+        }
+        coarse_row_map_f(i) = offset;
     });
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Prefix, timer.seconds());
     timer.reset();
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
-    consolidateUnique consolidate(htable, entries_coarse, edge_scan, hvals, wgts_coarse);
+    consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
     Kokkos::parallel_for("consolidate", policy_t(0, old_size), consolidate);
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
     next_level.mtx = gc;
-    next_level.nb_self_loops = c_vtx_w;
+    next_level.nb_self_loops = wgt_view_t("coarse self loop counts", nc);
     Kokkos::fence();
     experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
     timer.reset();
