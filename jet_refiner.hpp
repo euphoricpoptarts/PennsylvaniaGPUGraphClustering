@@ -177,16 +177,27 @@ struct scratch_mem {
         perm_scratch(largest.numRows()) {
         ordinal_t n = largest.numRows();
         edge_view_t conn_offsets("gain offsets", n + 1);
-        edge_offset_t gain_size = count_gain_size(largest);
-        perm_cdata.conn_vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("conn vals"), gain_size);
+        perm_cdata.conn_vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("conn vals"), largest.nnz());
         perm_cdata.pvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals"), n);
         perm_cdata.bvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("b vals"), n);
-        perm_cdata.conn_entries = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn entries"), gain_size);
+        perm_cdata.conn_entries = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn entries"), largest.nnz());
         perm_cdata.conn_offsets = conn_offsets;
         perm_cdata.dest_cache = part_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
         perm_cdata.conn_table_sizes = part_vt(Kokkos::ViewAllocateWithoutInitializing("map size"), n);
         perm_cdata.lock_bit = vtx_view_t("lock bit", n);
     }
+
+gain_vt get_vals_view(){
+    return perm_cdata.conn_vals;
+}
+
+part_vt get_entries_view(){
+    return perm_cdata.conn_entries;
+}
+
+edge_view_t get_offsets_view(){
+    return perm_cdata.conn_offsets;
+}
 
 void copy_refine_data(refine_data& lhs, refine_data& rhs){
     Kokkos::deep_copy(exec_space(), lhs.in_deg, rhs.in_deg);

@@ -281,13 +281,17 @@ struct consolidateUnique {
 coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     const vtx_view_t vcmap,
     const ordinal_t nc,
+    edge_view_t hrow_map_scratch,
+    vtx_view_t htable_scratch,
+    wgt_view_t hvals_scratch,
     ExperimentLoggerUtil<scalar_t>& experiment) {
 
     matrix_t g = level.mtx;
     ordinal_t n = g.numRows();
 
     Kokkos::Timer timer;
-    edge_view_t hrow_map("hashtable row map", nc + 1);
+    edge_view_t hrow_map = Kokkos::subview(hrow_map_scratch, std::make_pair((ordinal_t)0, nc + 1));
+    Kokkos::deep_copy(exec_space(), hrow_map, 0);
     countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
     Kokkos::fence();
@@ -305,14 +309,15 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Prefix, timer.seconds());
     timer.reset();
-    vtx_view_t htable(Kokkos::ViewAllocateWithoutInitializing("hashtable keys"), hash_size);
-    Kokkos::deep_copy(htable, -1);
-    wgt_view_t hvals("hashtable values", hash_size);
+    vtx_view_t htable = Kokkos::subview(htable_scratch, std::make_pair((edge_offset_t)0, hash_size));
+    Kokkos::deep_copy(exec_space(), htable, -1);
+    wgt_view_t hvals = Kokkos::subview(hvals_scratch, std::make_pair((edge_offset_t)0, hash_size));
+    Kokkos::deep_copy(exec_space(), hvals, 0);
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
     combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map);
-    if(!is_host_space && hash_size / n >= 12) {
+    if(true || !is_host_space && hash_size / n >= 12) {
         Kokkos::parallel_for("deduplicate", team_policy_t(n, Kokkos::AUTO), cnd);
     } else {
         bool use_dyn = should_use_dyn(n, g.graph.row_map, exec_space().concurrency());

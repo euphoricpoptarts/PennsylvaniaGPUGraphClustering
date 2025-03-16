@@ -94,7 +94,7 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), experiment);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
             Kokkos::deep_copy(next_clt.nb_self_loops, rfd.in_deg);
