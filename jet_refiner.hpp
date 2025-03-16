@@ -380,6 +380,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     }, big);
     vtx_view_t big_rows = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), big));
     vtx_view_t small_rows = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos - big));
+    float eps = 0.1;
     Kokkos::parallel_for("afterburner heuristic", team_policy_t(big, 256), KOKKOS_LAMBDA(const member& t){
         float change = 0;
         ordinal_t i = big_rows(t.league_rank());
@@ -393,7 +394,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             ordinal_t v = g.graph.entries(j);
             float vgain = pregain(v);
             //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+            if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
                 part_t vpart = dest_part(v);
                 scalar_t wgt = g.values(j);
                 float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
@@ -406,7 +407,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }, change);
         t.team_barrier();
         Kokkos::single(Kokkos::PerTeam(t), [&](){
-            if(igain + change > 0){
+            if(igain + change >= 0){
                 lock_bit(i) = 1;
             }
         });
@@ -424,7 +425,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             ordinal_t v = g.graph.entries(j);
             float vgain = pregain(v);
             //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= 0.1 || (abs(vgain - igain) < 0.1 && static_cast<ordinal_t>(hash(v)) < hi)){
+            if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
                 part_t vpart = dest_part(v);
                 scalar_t wgt = g.values(j);
                 float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
