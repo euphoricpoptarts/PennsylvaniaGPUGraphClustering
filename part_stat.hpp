@@ -43,7 +43,6 @@
 #include <iomanip>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
-#include "ExperimentLoggerUtil.hpp"
 
 namespace jet_partitioner {
 
@@ -78,6 +77,7 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
+    static constexpr double penalty = 1.0;
 
 //data that is preserved between levels in the multilevel scheme
 struct refine_data {
@@ -91,7 +91,7 @@ struct refine_data {
 
 static gain_t get_total_cut(const matrix_t g, const part_vt partition){
     gain_t total_cut = 0;
-    if(!is_host_space ){
+    if(!is_host_space && g.nnz() / g.numRows() >= 8){
         Kokkos::parallel_reduce("find total cut (team)", team_policy_t(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t, gain_t& update){
             gain_t local_cut = 0;
             ordinal_t i = t.league_rank();
@@ -154,37 +154,6 @@ static void relabel(part_vt labels){
 	});
 }
 
-static void relabel(part_vt labels, refine_data& rfd){
-	ordinal_t n = labels.extent(0);
-	vtx_view_t used("used labels", n);
-	Kokkos::parallel_for("find used labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-		ordinal_t l = labels(i);
-		Kokkos::atomic_add(&used(l), 1);
-	});
-    ordinal_t t_labels = 0;
-	Kokkos::parallel_scan("count labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-		if(used(i) > 0){
-			if(final) used(i) = update;
-			update++;
-		}
-	}, t_labels);
-	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-		labels(i) = used(labels(i));
-	});
-    gain_vt in_deg("new internal degree", t_labels);
-    gain_vt total_deg("new total degree", t_labels);
-    Kokkos::parallel_for("relabel degrees", policy_t(0, rfd.total_deg.size()), KOKKOS_LAMBDA(const ordinal_t i){
-		if(rfd.total_deg(i) > 0){
-            ordinal_t relabeled = used(i);
-            in_deg(relabeled) = rfd.in_deg(i);
-            total_deg(relabeled) = rfd.total_deg(i);
-        }
-	});
-    rfd.in_deg = in_deg;
-    rfd.total_deg = total_deg;
-    rfd.label_count = t_labels;
-}
-
 static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count, scalar_t g_degree){
     wgt_view_t internal("internal degree", label_count);
     wgt_view_t total("total degree", label_count);
@@ -205,7 +174,7 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
     Kokkos::parallel_reduce("sum modularity", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, double& update){
         double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
         double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
-        double l_mod = internal_ratio - (total_ratio*total_ratio);
+        double l_mod = internal_ratio - penalty*(total_ratio*total_ratio);
         update += l_mod;
     }, m);
     return m;
@@ -216,7 +185,7 @@ static double modularity(const scalar_t g_degree, const gain_vt internal, const 
     Kokkos::parallel_reduce("sum modularity", policy_t(0, internal.size()), KOKKOS_LAMBDA(const ordinal_t l, double& update){
         double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
         double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
-        double l_mod = internal_ratio - (total_ratio*total_ratio);
+        double l_mod = internal_ratio - penalty*(total_ratio*total_ratio);
         update += l_mod;
     }, m);
     return m;
@@ -389,7 +358,7 @@ static scalar_t sum(const wgt_view_t wdeg){
     Kokkos::parallel_reduce("sum view", policy_t(0, wdeg.size()), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
         update += wdeg(i);
     }, result);
-    std::cout << "G degree: " << result << std::endl;
+    // std::cout << "G degree: " << result << std::endl;
     return result;
 }
 

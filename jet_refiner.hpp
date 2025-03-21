@@ -135,7 +135,7 @@ struct conn_data {
 struct scratch_mem {
     obj_vt obj1, gain_persistent;
     vtx_view_t vtx1, vtx2, vtx3, zeros1;
-    part_vt part, dest_part, undersized;
+    part_vt part, dest_part;
     vtx_pin_st scan_host;
     gain_pin_st cut_change1, cut_change2, max_part;
     gain_pin_vt reduce_locs;
@@ -214,6 +214,34 @@ refine_data clone_refine_data(refine_data& rhs){
     clone.total_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("total degree of clusters"), rhs.total_deg.extent(0));
     copy_refine_data(clone, rhs);
     return clone;
+}
+
+void relabel_contiguously(part_vt labels, refine_data& rfd, scratch_mem& scratch){
+	ordinal_t n = labels.extent(0);
+    ordinal_t initial_count = rfd.label_count;
+	vtx_view_t used = Kokkos::subview(scratch.vtx1, std::make_pair((ordinal_t)0, initial_count));
+    ordinal_t t_labels = 0;
+	Kokkos::parallel_scan("count labels", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+		if(rfd.total_deg(i) > 0){
+			if(final) used(i) = update;
+			update++;
+		}
+	}, t_labels);
+	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		labels(i) = used(labels(i));
+	});
+    gain_vt in_deg("new internal degree", t_labels);
+    gain_vt total_deg("new total degree", t_labels);
+    Kokkos::parallel_for("relabel degrees", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i){
+		if(rfd.total_deg(i) > 0){
+            ordinal_t relabeled = used(i);
+            in_deg(relabeled) = rfd.in_deg(i);
+            total_deg(relabeled) = rfd.total_deg(i);
+        }
+	});
+    rfd.in_deg = in_deg;
+    rfd.total_deg = total_deg;
+    rfd.label_count = t_labels;
 }
 
 //determines which vertices (if any) should be moved to another part to decrease cutsize
@@ -750,7 +778,8 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         // edges of this vertex in p before moving
         gain_t p_con = cdata.pvals(i);
         // edges of this vertex in best before moving
-        // this is stored by an earlier lookup because the lookup is very expensive for the initial pass (the hashtables don't function as hashtables in the initial pass)
+        // this is stored by an earlier lookup because the lookup is very expensive for the initial pass
+        // in fact the hashtables are not always initialized in the first iteration so this is mandatory
         gain_t b_con = cdata.bvals(i);
         Kokkos::atomic_add(&curr_state.in_deg(p), -p_con - nb_self_loops(i));
         Kokkos::atomic_add(&curr_state.in_deg(best), b_con + nb_self_loops(i));
@@ -933,10 +962,11 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         vtx_view_t moves;
         matrix_t c_graph = cdata.c_graph;
         if(!cdata.init){
+            // use the input graph in place of the conn graph
             c_graph = g;
         }
         moves = jet_lp(prob, c_graph, part, curr_state, cdata, scratch, filter_ratio, skip);
-        if(moves.extent(0) == 0) return;
+        if(moves.extent(0) == 0) break;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
         curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
         // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
@@ -947,6 +977,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         }
     }
     Kokkos::fence();
+    relabel_contiguously(best_part, best_state, scratch);
     //divide cut by 2 because each cut edge is counted from both sides
     typename ExperimentLoggerUtil<scalar_t>::CoarseLevel cl(best_state.cut / 2, 0, g.nnz(), g.numRows(), y.seconds(), iter_t.seconds(), iter_count, iter_count);
     // std::cout << "Avg iteration time: " << (iter_t.seconds() / iter_count) << std::endl;

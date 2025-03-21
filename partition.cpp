@@ -83,6 +83,43 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
+matrix_t constraint_graph(const matrix_t& g, const part_vt& constraint, vtx_view_t scratch){
+    edge_view_t row_map("row map", g.numRows() + 1);
+    Kokkos::parallel_for("mark", policy(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = t.league_rank();
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j, gain_t& update){
+            ordinal_t v = g.graph.entries(j);
+            if(constraint(v) == constraint(i)){
+                scratch(j) = 1;
+                update++;
+            } else {
+                scratch(j) = 0;
+            }
+        }, row_map(i));
+    });
+    edge_offset_t nnz = 0;
+    Kokkos::parallel_scan("scan offsets", r_policy(0, g.numRows() + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
+        edge_offset_t val = row_map(i);
+        if(final){
+            row_map(i) = update;
+        }
+        update += val;
+    }, nnz);
+    vtx_view_t entries(Kokkos::ViewAllocateWithoutInitializing("entries"), nnz);
+    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("entries"), nnz);
+    Kokkos::parallel_scan("stream compaction", r_policy(0, g.nnz()), KOKKOS_LAMBDA(const edge_offset_t j, edge_offset_t& insert, const bool final){
+        if(scratch(j) == 1){
+            if(final){
+                entries(insert) = g.graph.entries(j);
+                values(insert) = g.values(j);
+            }
+            insert++;
+        }
+    });
+    matrix_t cg("constraint graph", g.numRows(), g.numRows(), nnz, values, row_map, entries);
+    return cg;
+}
+
 part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
@@ -97,7 +134,6 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             part(x) = x;
         });
         refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, true, experiment);
-        stat::relabel(part, rfd);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -124,7 +160,62 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             part(x) = coarse_part(part(x));
         });
         refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, false, experiment);
-        stat::relabel(part, rfd);
+    }
+    return parts[0];
+}
+
+part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, part_vt constraint, ExperimentLoggerUtil<value_t>& experiment){
+    std::vector<clt> levels;
+    std::vector<part_vt> parts;
+    levels.push_back(top);
+    rfd.init = false;
+    double aggregate = 0;
+    bool stop = false;
+    while(true) {
+        clt c = levels[levels.size() - 1];
+        // std::cout << "Pre-refine" << std::endl;
+        part_vt part("cluster assignments", c.mtx.numRows());
+        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = x;
+        });
+        matrix_t cg = constraint_graph(c.mtx, constraint, refiner.get_entries_view());
+        refiner.jet_refine(cg, c.wdeg, c.nb_self_loops, part, rfd, true, experiment);
+        parts.push_back(part);
+        if(rfd.label_count < c.mtx.numRows()){
+            Kokkos::Timer t;
+            contracter_t contracter;
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), experiment);
+            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
+            part_vt next_constraint("active constraint", rfd.label_count);
+            Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+                next_constraint(part(x)) = constraint(x);
+            });
+            constraint = next_constraint;
+            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
+            Kokkos::deep_copy(next_clt.nb_self_loops, rfd.in_deg);
+            levels.push_back(next_clt);
+            aggregate += t.seconds();
+        } else if(!stop) {
+            Kokkos::deep_copy(constraint, 0);
+            parts.pop_back();
+            stop = true;
+            continue;
+        } else {
+            break;
+        }
+    }
+
+    std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
+    std::cout << rfd.mod << std::endl;
+    
+    for(int i = levels.size() - 2; i >= 0; i--){
+        clt c = levels[i];
+        part_vt coarse_part = parts[i + 1];
+        part_vt part = parts[i];
+        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = coarse_part(part(x));
+        });
+        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, false, experiment);
     }
     return parts[0];
 }
@@ -144,13 +235,21 @@ part_vt partition(value_t& edge_cut,
     Kokkos::fence();
     Kokkos::Timer t;
     part_vt part = rec_part(refiner, c, rfd, experiment);
-    for(int i = 0; i < 0; i++){
-        // connected_comps(g, part);
-        part = rec_part(refiner, c, rfd, experiment);
+    std::cout << t.seconds() << std::endl;
+    if(false){
+        double obj = rfd.mod;
+        do {
+            obj = rfd.mod;
+            // connected_comps(g, part);
+            // c.mtx = constraint_graph(g, part, refiner.get_entries_view());
+            Kokkos::Timer x;
+            part = rec_part(refiner, c, rfd, part, experiment);
+            std::cout << x.seconds() << std::endl;
+        } while(obj < rfd.mod);
     }
     Kokkos::fence();
-    // connected_comps(g, part);
     std::cout << t.seconds() << std::endl;
+    // connected_comps(g, part);
     ordinal_t labels = stat::get_total_labels(part);
     stat::reset_rfd(g, part, nb_self_loops, labels, rfd);
     std::cout << "Total labels " << labels << std::endl;
