@@ -139,7 +139,6 @@ struct scratch_mem {
     vtx_pin_st scan_host;
     gain_pin_st cut_change1, cut_change2, max_part;
     gain_pin_vt reduce_locs;
-    typename gain_vt::HostMirror reduce_copy;
 
     scratch_mem(const ordinal_t n) {
         obj1 = obj_vt(Kokkos::ViewAllocateWithoutInitializing("obj scratch 1"), n);
@@ -151,11 +150,9 @@ struct scratch_mem {
         part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
         zeros1 = vtx_view_t("zeros 1", n);
         scan_host = vtx_pin_st("scan host");
-        reduce_locs = gain_pin_vt("reduce to here", 3);
-        reduce_copy = Kokkos::create_mirror_view(reduce_locs);
+        reduce_locs = gain_pin_vt("reduce to here", 2);
         cut_change1 = Kokkos::subview(reduce_locs, 0);
         cut_change2 = Kokkos::subview(reduce_locs, 1);
-        max_part = Kokkos::subview(reduce_locs, 2);
     }
 };
 
@@ -403,11 +400,11 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             }
             update++;
         } else if(final){
-            scratch.vtx2(x - update) = i;
+            scratch.vtx1(n - 1 + update - x) = i;
         }
     }, big);
     vtx_view_t big_rows = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), big));
-    vtx_view_t small_rows = Kokkos::subview(scratch.vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos - big));
+    vtx_view_t small_rows = Kokkos::subview(scratch.vtx1, std::make_pair(n - (num_pos - big), n));
     float eps = 0.1;
     Kokkos::parallel_for("afterburner heuristic", team_policy_t(big, 256), KOKKOS_LAMBDA(const member& t){
         float change = 0;
@@ -509,15 +506,19 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
         }
     });
     ordinal_t total = 0;
+    ordinal_t cutoff = 32;
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(swap_bit(i)){
-            if(final){
-                scratch.vtx1(update) = i;
-                // reset to zero for next iteration
-                swap_bit(i) = 0;
-                cdata.dest_cache(i) = NULL_PART;
+            ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+            if(degree >= cutoff){
+                if(final){
+                    scratch.vtx1(update) = i;
+                    // reset to zero for next iteration
+                    swap_bit(i) = 0;
+                    cdata.dest_cache(i) = NULL_PART;
+                }
+                update++;
             }
-            update++;
         }
     }, total);
     vtx_view_t affected = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
@@ -565,6 +566,61 @@ void update_large(const problem& prob, part_vt part, const vtx_view_t swaps, scr
             }
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, cdata.pvals(i));
+    });
+    Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        if(swap_bit(i)){
+            ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+            if(degree < cutoff){
+                if(final){
+                    scratch.vtx1(update) = i;
+                    // reset to zero for next iteration
+                    swap_bit(i) = 0;
+                    cdata.dest_cache(i) = NULL_PART;
+                }
+                update++;
+            }
+        }
+    }, total);
+    affected = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
+    Kokkos::parallel_for("reset conn DS", policy_t(0, total), KOKKOS_LAMBDA(const ordinal_t x){
+        const ordinal_t i = affected(x);
+        edge_offset_t g_start = cdata.conn_offsets(i);
+        edge_offset_t g_end = cdata.conn_offsets(i + 1);
+        for(edge_offset_t j = g_start; j < g_end; j++) {
+            cdata.conn_entries(j) = NULL_PART;
+        }
+        for(edge_offset_t j = g_start; j < g_end; j++) {
+            cdata.conn_vals(j) = 0;
+        }
+        part_t size = g_end - g_start;
+        part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
+        gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+        gain_t update = 0;
+        part_t p_i = part(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
+            ordinal_t v = g.graph.entries(j);
+            gain_t wgt = g.values(j);
+            part_t p = part(v);
+            if(p == p_i){
+                update += wgt;
+                continue;
+            }
+            while(j + 1 < g.graph.row_map(i+1) && p == part(g.graph.entries(j+1))){
+                j++;
+                wgt += g.values(j);
+            }
+            part_t p_o = hash(p) % static_cast<uint32_t>(size);
+            part_t px = s_conn_entries[p_o];
+            while(px != p && px != NULL_PART){
+                p_o = (p_o + 1) % size;
+                px = s_conn_entries[p_o];
+            }
+            if(px != p){
+                s_conn_entries[p_o] = p;
+            }
+            s_conn_vals[p_o] += wgt;
+        }
+        cdata.pvals(i) = update;
     });
 }
 
@@ -798,7 +854,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
             Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
         });
         if(!cdata.init){
-            init_conn_graph(cdata, prob.g, part);
+            init_conn_graph(cdata, prob.g, part, scratch);
             Kokkos::deep_copy(exec_space(), cdata.dest_cache, NULL_PART);
         } else {
             update_large(prob, part, swaps, scratch, cdata);
@@ -835,12 +891,27 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
 }
 
 //initialize conn hash tables for each vertex
-void init_conn_graph(conn_data& cdata, const matrix_t& g, const part_vt& part){
+void init_conn_graph(conn_data& cdata, const matrix_t& g, const part_vt& part, scratch_mem& scratch){
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
     Kokkos::deep_copy(exec_space(), cdata.conn_entries, NULL_PART);
-    Kokkos::parallel_for("init conn DS", team_policy_t(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = t.league_rank();
+    ordinal_t cutoff = 32;
+    ordinal_t total = 0;
+    ordinal_t n = g.numRows();
+    Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+        if(degree >= cutoff){
+            if(final){
+                scratch.vtx1(update) = i;
+            }
+            update++;
+        } else if(final){
+            scratch.vtx1(n - 1 - (i - update)) = i;
+        }
+    }, total);
+    vtx_view_t big = Kokkos::subview(scratch.vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
+    Kokkos::parallel_for("init conn DS", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
         part_t size = g_end - g_start;
@@ -876,10 +947,46 @@ void init_conn_graph(conn_data& cdata, const matrix_t& g, const part_vt& part){
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, cdata.pvals(i));
     });
+    vtx_view_t small = Kokkos::subview(scratch.vtx1, std::make_pair(total, n));
+    Kokkos::parallel_for("init conn DS", policy_t(0, n - total), KOKKOS_LAMBDA(const ordinal_t x){
+        ordinal_t i = small(x);
+        edge_offset_t g_start = cdata.conn_offsets(i);
+        edge_offset_t g_end = cdata.conn_offsets(i + 1);
+        part_t size = g_end - g_start;
+        part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
+        gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+        gain_t update = 0;
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+            ordinal_t v = g.graph.entries(j);
+            gain_t wgt = g.values(j);
+            part_t p = part(v);
+            if(p == part(i)){
+                update += wgt;
+                continue;
+            }
+            part_t p_o = hash(p) % static_cast<uint32_t>(size);
+            bool success = false;
+            while(!success){
+                part_t px = s_conn_entries[p_o];
+                while(px != p && px != NULL_PART){
+                    p_o = (p_o + 1) % size;
+                    px = s_conn_entries[p_o];
+                }
+                if(px == p){
+                    success = true;
+                } else {
+                    s_conn_entries[p_o] = p;
+                    success = true;
+                }
+            }
+            s_conn_vals[p_o] += wgt;
+        }
+        cdata.pvals(i) = update;
+    });
 }
 
 //initializes datastructures
-conn_data init_conn_data(const conn_data& scratch_cdata, problem& prob, int label_count){
+conn_data init_conn_data(const conn_data& scratch_cdata, problem& prob, int label_count, bool top){
     const matrix_t g = prob.g;
     ordinal_t n = g.numRows();
     conn_data cdata;
@@ -888,6 +995,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, problem& prob, int labe
     cdata.conn_table_sizes = Kokkos::subview(scratch_cdata.conn_table_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
     Kokkos::parallel_for("comp conn row size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
+        if(!top) degree *= 1.2;
         if(degree > label_count) degree = label_count;
         cdata.conn_offsets(i + 1) = degree;
         cdata.conn_table_sizes(i) = degree;
@@ -938,9 +1046,9 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     refine_data curr_state = clone_refine_data(best_state);
     part_vt part = Kokkos::subview(scratch.part, std::make_pair(static_cast<ordinal_t>(0), static_cast<ordinal_t>(g.numRows())));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    conn_data cdata = init_conn_data(perm_cdata, prob, best_state.label_count);
+    conn_data cdata = init_conn_data(perm_cdata, prob, best_state.label_count, best_state.g_deg == g.nnz());
     if(!is_initial){
-        init_conn_graph(cdata, g, part);
+        init_conn_graph(cdata, g, part, scratch);
     }
     int iter_count = 0;
     Kokkos::fence();
