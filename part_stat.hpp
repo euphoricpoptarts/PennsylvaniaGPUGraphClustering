@@ -81,7 +81,7 @@ public:
 
 //data that is preserved between levels in the multilevel scheme
 struct refine_data {
-    gain_vt in_deg, total_deg;
+    gain_vt total_deg;
     scalar_t g_deg = 0;
     gain_t cut = 0;
     double mod = -1.0;
@@ -180,38 +180,14 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
     return m;
 }
 
-static double modularity(const scalar_t g_degree, const gain_vt internal, const gain_vt total){
+static double modularity(const scalar_t g_degree, const scalar_t cutsize, const gain_vt total){
     double m = 0;
-    Kokkos::parallel_reduce("sum modularity", policy_t(0, internal.size()), KOKKOS_LAMBDA(const ordinal_t l, double& update){
-        double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
+    Kokkos::parallel_reduce("sum modularity", policy_t(0, total.size()), KOKKOS_LAMBDA(const ordinal_t l, double& update){
         double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
-        double l_mod = internal_ratio - penalty*(total_ratio*total_ratio);
-        update += l_mod;
+        update -= penalty*(total_ratio*total_ratio);
     }, m);
+    m += 1.0 - static_cast<double>(cutsize) / static_cast<double>(g_degree);
     return m;
-}
-
-static void reset_rfd(matrix_t& g, part_vt labels, wgt_view_t nb_self_loops, ordinal_t label_count, refine_data& rfd){
-    wgt_view_t internal("internal degree", label_count);
-    wgt_view_t total("total degree", label_count);
-    ordinal_t n = g.numRows();
-    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-		scalar_t id = nb_self_loops(i);
-        scalar_t td = nb_self_loops(i);
-        ordinal_t l = labels(i);
-        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
-            td += g.values(j);
-            ordinal_t v = g.graph.entries(j);
-            if(l == labels(v)) id += g.values(j);
-        }
-        Kokkos::atomic_add(&internal(l), id);
-        Kokkos::atomic_add(&total(l), td);
-	});
-    rfd.in_deg = internal;
-    rfd.total_deg = total;
-    rfd.mod = modularity(rfd.g_deg, rfd.in_deg, rfd.total_deg);
-    rfd.cut = get_total_cut(g, labels);
-    rfd.label_count = label_count;
 }
 
 static int total_labels(const gain_vt total){

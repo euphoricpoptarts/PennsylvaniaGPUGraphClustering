@@ -46,7 +46,7 @@
 using namespace jet_partitioner;
 using ref_t = jet_refiner<matrix_t, part_t>;
 using rfd_t = typename ref_t::refine_data;
-using stat = part_stat<matrix_t, part_t>;
+using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
 using clt = contracter_t::coarse_level_triple;
 
@@ -133,15 +133,14 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, true, experiment);
+        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, true, experiment);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), refiner.get_vtx_view(), experiment);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
-            Kokkos::deep_copy(next_clt.nb_self_loops, rfd.in_deg);
             levels.push_back(next_clt);
             aggregate += t.seconds();
         } else {
@@ -159,7 +158,7 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, false, experiment);
+        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, experiment);
     }
     return parts[0];
 }
@@ -179,12 +178,12 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, part_vt constraint, Experi
             part(x) = x;
         });
         matrix_t cg = constraint_graph(c.mtx, constraint, refiner.get_entries_view());
-        refiner.jet_refine(cg, c.wdeg, c.nb_self_loops, part, rfd, true, experiment);
+        refiner.jet_refine(cg, c.wdeg, part, rfd, true, experiment);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, refiner.get_offsets_view(), refiner.get_entries_view(), refiner.get_vals_view(), refiner.get_vtx_view(), experiment);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             part_vt next_constraint("active constraint", rfd.label_count);
             Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
@@ -192,7 +191,6 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, part_vt constraint, Experi
             });
             constraint = next_constraint;
             Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
-            Kokkos::deep_copy(next_clt.nb_self_loops, rfd.in_deg);
             levels.push_back(next_clt);
             aggregate += t.seconds();
         } else if(!stop) {
@@ -215,7 +213,7 @@ part_vt rec_part(ref_t& refiner, clt top, rfd_t& rfd, part_vt constraint, Experi
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine(c.mtx, c.wdeg, c.nb_self_loops, part, rfd, false, experiment);
+        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, experiment);
     }
     return parts[0];
 }
@@ -226,14 +224,13 @@ part_vt partition(value_t& edge_cut,
                                   ExperimentLoggerUtil<value_t>& experiment) {
     rfd_t rfd;
     ref_t refiner(g);
-    wgt_view_t nb_self_loops("self loop counter", g.numRows());
     clt c;
     c.mtx = g;
-    c.nb_self_loops = nb_self_loops;
     c.wdeg = vweights;
     clt active_clt = c;
     Kokkos::fence();
     Kokkos::Timer t;
+    std::cout << std::setprecision(6);
     part_vt part = rec_part(refiner, c, rfd, experiment);
     std::cout << t.seconds() << std::endl;
     if(false){
@@ -250,16 +247,15 @@ part_vt partition(value_t& edge_cut,
     Kokkos::fence();
     std::cout << t.seconds() << std::endl;
     // connected_comps(g, part);
-    ordinal_t labels = stat::get_total_labels(part);
-    stat::reset_rfd(g, part, nb_self_loops, labels, rfd);
+    ordinal_t labels = pstat::get_total_labels(part);
     std::cout << "Total labels " << labels << std::endl;
-    double modularity = stat::modularity(g, part, labels, g.nnz());
-    std::cout << "Modularity: " << std::setprecision(6) << modularity << std::endl;
+    double modularity = pstat::modularity(g, part, labels, g.nnz());
+    std::cout << "Modularity: " << modularity << std::endl;
     wgt_view_t vtx_w("vertex weights", g.numRows());
     Kokkos::deep_copy(vtx_w, 1);
-    wgt_view_t part_sizes = stat::get_part_sizes(g, vtx_w, part, labels);
-    std::cout << "Largest part: " << static_cast<double>(stat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
-    edge_cut = rfd.cut;
+    wgt_view_t part_sizes = pstat::get_part_sizes(g, vtx_w, part, labels);
+    std::cout << "Largest part: " << static_cast<double>(pstat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
+    edge_cut = pstat::get_total_cut(g, part);
     return part;
 }
 

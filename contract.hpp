@@ -167,19 +167,22 @@ struct combineAndDedupe {
     wgt_view_t hvals;
     edge_view_t hrow_map;
     edge_view_t counts;
+    vtx_view_t vtx;
 
     combineAndDedupe(matrix_t _g,
             vtx_view_t _vcmap,
             vtx_view_t _htable,
             wgt_view_t _hvals,
             edge_view_t _hrow_map,
-            edge_view_t _counts) :
+            edge_view_t _counts,
+            vtx_view_t _vtx) :
             g(_g),
             vcmap(_vcmap),
             htable(_htable),
             hvals(_hvals),
             hrow_map(_hrow_map),
-            counts(_counts) {}
+            counts(_counts),
+            vtx(_vtx) {}
 
     KOKKOS_INLINE_FUNCTION
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u, const ordinal_t& i) const {
@@ -202,7 +205,7 @@ struct combineAndDedupe {
     KOKKOS_INLINE_FUNCTION
         void operator()(const member& thread) const
     {
-        const ordinal_t x = thread.league_rank();
+        const ordinal_t x = vtx(thread.league_rank());
         const ordinal_t i = vcmap(x);
         const edge_offset_t start = g.graph.row_map(x);
         const edge_offset_t end = g.graph.row_map(x + 1);
@@ -218,8 +221,9 @@ struct combineAndDedupe {
     }
 
     KOKKOS_INLINE_FUNCTION
-        void operator()(const ordinal_t& x) const
+        void operator()(const ordinal_t& xx) const
     {
+        const ordinal_t x = vtx(xx);
         const ordinal_t i = vcmap(x);
         const edge_offset_t start = g.graph.row_map(x);
         const edge_offset_t end = g.graph.row_map(x + 1);
@@ -267,6 +271,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     edge_view_t hrow_map_scratch,
     vtx_view_t htable_scratch,
     wgt_view_t hvals_scratch,
+    vtx_view_t vtx_scratch,
     ExperimentLoggerUtil<scalar_t>& experiment) {
 
     matrix_t g = level.mtx;
@@ -300,17 +305,29 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f);
-    if(true || !is_host_space && hash_size / n >= 12) {
-        Kokkos::parallel_for("deduplicate", team_policy_t(n, Kokkos::AUTO), cnd);
-    } else {
-        bool use_dyn = should_use_dyn(n, g.graph.row_map, exec_space().concurrency());
-        if(use_dyn){
-            Kokkos::parallel_for("deduplicate", dyn_policy_t(0, n), cnd);
-        } else {
-            Kokkos::parallel_for("deduplicate", policy_t(0, n), cnd);
+    ordinal_t low = 0, high = 0;
+    ordinal_t limit = 32;
+    Kokkos::parallel_scan("compact high degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+        if(degree >= limit){
+            if(final){
+                vtx_scratch(update) = i;
+            }
+            update++;
         }
-    }
+    }, high);
+    Kokkos::parallel_scan("compact low degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+        if(degree < limit){
+            if(final){
+                vtx_scratch(high + update) = i;
+            }
+            update++;
+        }
+    }, low);
+    combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_scratch);
+    Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd);
+    Kokkos::parallel_for("deduplicate", policy_t(high, high + low), cnd);
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Dedupe, timer.seconds());
     timer.reset();

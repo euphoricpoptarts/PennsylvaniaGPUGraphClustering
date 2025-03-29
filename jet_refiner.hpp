@@ -112,7 +112,6 @@ struct problem {
     matrix_t g;
     wgt_view_t vtx_w;
     wgt_view_t wdeg;
-    wgt_view_t nb_self_loops;
     ordinal_t opt;
     ordinal_t size_max;
     bool use_team = true;
@@ -195,8 +194,11 @@ edge_view_t get_offsets_view(){
     return perm_cdata.conn_offsets;
 }
 
+vtx_view_t get_vtx_view(){
+    return perm_scratch.vtx1;
+}
+
 void copy_refine_data(refine_data& lhs, refine_data& rhs){
-    Kokkos::deep_copy(exec_space(), lhs.in_deg, rhs.in_deg);
     Kokkos::deep_copy(exec_space(), lhs.total_deg, rhs.total_deg);
     lhs.g_deg = rhs.g_deg;
     lhs.cut = rhs.cut;
@@ -207,7 +209,6 @@ void copy_refine_data(refine_data& lhs, refine_data& rhs){
 
 refine_data clone_refine_data(refine_data& rhs){
     refine_data clone;
-    clone.in_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("internal degree of clusters"), rhs.in_deg.extent(0));
     clone.total_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("total degree of clusters"), rhs.total_deg.extent(0));
     copy_refine_data(clone, rhs);
     return clone;
@@ -227,16 +228,13 @@ void relabel_contiguously(part_vt labels, refine_data& rfd, scratch_mem& scratch
 	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		labels(i) = used(labels(i));
 	});
-    gain_vt in_deg("new internal degree", t_labels);
     gain_vt total_deg("new total degree", t_labels);
     Kokkos::parallel_for("relabel degrees", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i){
 		if(rfd.total_deg(i) > 0){
             ordinal_t relabeled = used(i);
-            in_deg(relabeled) = rfd.in_deg(i);
             total_deg(relabeled) = rfd.total_deg(i);
         }
 	});
-    rfd.in_deg = in_deg;
     rfd.total_deg = total_deg;
     rfd.label_count = t_labels;
 }
@@ -824,7 +822,6 @@ static gain_t lookup(const part_t* keys, const gain_t* vals, const part_t& targe
 //4 kernels, 1 device-host syncs
 void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, const part_vt dest_part, scratch_mem& scratch, conn_data& cdata, refine_data& curr_state, bool use_big){
     const wgt_view_t& wdeg = prob.wdeg;
-    const wgt_view_t& nb_self_loops = prob.nb_self_loops;
     ordinal_t total_moves = swaps.extent(0);
     //total change in cutsize = (sum over all moves) -((new_b_con - new_p_con) + (old_b_con - old_p_con))
     Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
@@ -837,8 +834,6 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         // this is stored by an earlier lookup because the lookup is very expensive for the initial pass
         // in fact the hashtables are not always initialized in the first iteration so this is mandatory
         gain_t b_con = cdata.bvals(i);
-        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con - nb_self_loops(i));
-        Kokkos::atomic_add(&curr_state.in_deg(best), b_con + nb_self_loops(i));
         gain_update += b_con - p_con;
     }, scratch.cut_change1);
     //change part assignments and update part sizes
@@ -881,8 +876,6 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
         //edges of other vertices in best connecting to this vertex after moving
         gain_t b_con = cdata.pvals(i);
-        Kokkos::atomic_add(&curr_state.in_deg(p), -p_con);
-        Kokkos::atomic_add(&curr_state.in_deg(best), b_con);
         gain_update += b_con - p_con;
     }, scratch.cut_change2);
     exec_space().fence();
@@ -1020,7 +1013,7 @@ conn_data init_conn_data(const conn_data& scratch_cdata, problem& prob, int labe
     return cdata;
 }
 
-void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, part_vt best_part, refine_data& best_state, bool is_initial, ExperimentLoggerUtil<scalar_t>& experiment){
+void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_data& best_state, bool is_initial, ExperimentLoggerUtil<scalar_t>& experiment){
     Kokkos::Timer y;
     //contains several scratch views that are reused in each iteration
     //reallocating in each iteration would be expensive (GPU memory is often slow to deallocate)
@@ -1029,19 +1022,16 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
     //ie. if this is the coarsest level
     if(!best_state.init){
         best_state.mod = -1.0;
-        best_state.in_deg = gain_vt("internal degree of clusters", g.numRows());
         best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
         best_state.g_deg = stat::sum(wdeg);
         best_state.cut = best_state.g_deg;
         best_state.label_count = g.numRows();
-        Kokkos::deep_copy(best_state.in_deg, nb_self_loops);
         Kokkos::deep_copy(best_state.total_deg, wdeg);
         best_state.init = true;
     }
     problem prob;
     prob.g = g;
     prob.wdeg = wdeg;
-    prob.nb_self_loops = nb_self_loops;
     prob.use_team = (g.nnz() / g.numRows() >= 8);
     refine_data curr_state = clone_refine_data(best_state);
     part_vt part = Kokkos::subview(scratch.part, std::make_pair(static_cast<ordinal_t>(0), static_cast<ordinal_t>(g.numRows())));
@@ -1076,7 +1066,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, wgt_view_t nb_self_loops, par
         moves = jet_lp(prob, c_graph, part, curr_state, cdata, scratch, filter_ratio, skip);
         if(moves.extent(0) == 0) break;
         perform_moves(prob, part, moves, scratch.dest_part, scratch, cdata, curr_state, use_big);
-        curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.in_deg, curr_state.total_deg);
+        curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
         // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.mod > best_state.mod){
