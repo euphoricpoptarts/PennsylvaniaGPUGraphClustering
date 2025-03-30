@@ -44,6 +44,7 @@
 #include "KokkosKernels_HashmapAccumulator.hpp"
 #include "KokkosKernels_Uniform_Initialized_MemoryPool.hpp"
 #include "ExperimentLoggerUtil.hpp"
+#include "memory_store.hpp"
 
 namespace jet_partitioner {
 
@@ -78,6 +79,7 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
+    using mem_t = memory_store<matrix_t, part_t>;
     static constexpr ordinal_t get_null_val() {
         // this value must line up with the null value used by the hashmap
         // accumulator
@@ -268,17 +270,14 @@ struct consolidateUnique {
 coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     const vtx_view_t vcmap,
     const ordinal_t nc,
-    edge_view_t hrow_map_scratch,
-    vtx_view_t htable_scratch,
-    wgt_view_t hvals_scratch,
-    vtx_view_t vtx_scratch,
+    mem_t& mem,
     ExperimentLoggerUtil<scalar_t>& experiment) {
 
     matrix_t g = level.mtx;
     ordinal_t n = g.numRows();
 
     Kokkos::Timer timer;
-    edge_view_t hrow_map = Kokkos::subview(hrow_map_scratch, std::make_pair((ordinal_t)0, nc + 1));
+    edge_view_t hrow_map = Kokkos::subview(mem.cd_mem.conn_offsets, std::make_pair((ordinal_t)0, nc + 1));
     Kokkos::deep_copy(exec_space(), hrow_map, 0);
     countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
@@ -297,9 +296,9 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::fence();
     experiment.addMeasurement(Measurement::Prefix, timer.seconds());
     timer.reset();
-    vtx_view_t htable = Kokkos::subview(htable_scratch, std::make_pair((edge_offset_t)0, hash_size));
+    vtx_view_t htable = Kokkos::subview(mem.cd_mem.conn_entries, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), htable, -1);
-    wgt_view_t hvals = Kokkos::subview(hvals_scratch, std::make_pair((edge_offset_t)0, hash_size));
+    wgt_view_t hvals = Kokkos::subview(mem.cd_mem.conn_vals, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), hvals, 0);
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts
@@ -307,6 +306,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
     ordinal_t low = 0, high = 0;
     ordinal_t limit = 32;
+    vtx_view_t vtx_scratch = mem.s_mem.vtx1;
     Kokkos::parallel_scan("compact high degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
         if(degree >= limit){
