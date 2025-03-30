@@ -97,10 +97,6 @@ public:
     static constexpr part_t NULL_PART = -1;
     static constexpr part_t HASH_RECLAIM = -2;
 
-    static const ordinal_t max_sections = 128;
-    static const int max_buckets = 50;
-    static const int mid_bucket = 25;
-
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
         x ^= x >> 17;
@@ -112,8 +108,6 @@ struct problem {
     matrix_t g;
     wgt_view_t vtx_w;
     wgt_view_t wdeg;
-    ordinal_t opt;
-    ordinal_t size_max;
     bool use_team = true;
 };
 
@@ -835,18 +829,19 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         // in fact the hashtables are not always initialized in the first iteration so this is mandatory
         gain_t b_con = cdata.bvals(i);
         gain_update += b_con - p_con;
+        cdata.dest_cache(i) = NULL_PART;
+        Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
+        Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
     }, scratch.cut_change1);
     //change part assignments and update part sizes
     if(!cdata.init || use_big || total_moves >= prob.g.numRows() * 0.1){
-        Kokkos::parallel_for("perform moves", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
+        // update cluster ids before updating datastructures
+        Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
             part_t p = part(i);
             part_t best = dest_part(i);
-            cdata.dest_cache(i) = NULL_PART;
             part(i) = best;
             dest_part(i) = p;
-            Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
-            Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
         });
         if(!cdata.init){
             init_conn_graph(cdata, prob.g, part, scratch);
@@ -855,14 +850,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
             update_large(prob, part, swaps, scratch, cdata);
         }
     } else {
-        Kokkos::parallel_for("perform moves", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
-            ordinal_t i = swaps(x);
-            part_t p = part(i);
-            part_t best = dest_part(i);
-            cdata.dest_cache(i) = NULL_PART;
-            Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
-            Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
-        });
+        // cluster ids updated inside this function
         update_small(prob, part, swaps, dest_part, cdata);
     }
     Kokkos::parallel_reduce("count cutsize change part2", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
@@ -871,10 +859,10 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, co
         part_t best = part(i);
         edge_offset_t start = cdata.conn_offsets(i);
         part_t size = cdata.conn_table_sizes(i);
-        //edges of other vertices in p connecting to this vertex after moving
+        // edges of other vertices in p connecting to this vertex after moving
         // this lookup is cheaper now since the hashtables should be less full
         gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
-        //edges of other vertices in best connecting to this vertex after moving
+        // edges of other vertices in best connecting to this vertex after moving
         gain_t b_con = cdata.pvals(i);
         gain_update += b_con - p_con;
     }, scratch.cut_change2);
