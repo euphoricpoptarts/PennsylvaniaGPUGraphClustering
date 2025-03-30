@@ -130,7 +130,7 @@ struct scratch_mem {
     vtx_view_t vtx1, vtx2, vtx3, zeros1;
     part_vt part, dest_part;
     vtx_pin_st scan_host;
-    gain_pin_st cut_change1, cut_change2, max_part;
+    gain_pin_st cut_change1, cut_change2;
     gain_pin_vt reduce_locs;
 
     scratch_mem(const ordinal_t n) {
