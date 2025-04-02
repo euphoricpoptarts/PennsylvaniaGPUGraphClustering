@@ -46,7 +46,7 @@
 #include "ExperimentLoggerUtil.hpp"
 #include "memory_store.hpp"
 
-namespace jet_partitioner {
+namespace jet_community {
 
 template<typename ordinal_t>
 KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
@@ -95,7 +95,6 @@ public:
     // interp matrix maps previous level to this level
     struct coarse_level_triple {
         matrix_t mtx;
-        wgt_view_t nb_self_loops;
         wgt_view_t wdeg;
     };
 
@@ -347,7 +346,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
     next_level.mtx = gc;
-    next_level.nb_self_loops = wgt_view_t("coarse self loop counts", nc);
     Kokkos::fence();
     experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
     timer.reset();

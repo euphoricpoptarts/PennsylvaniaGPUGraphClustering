@@ -47,7 +47,7 @@
 #include "memory_store.hpp"
 #include "part_stat.hpp"
 
-namespace jet_partitioner {
+namespace jet_community {
 
 template<class crsMat, typename part_t>
 class jet_refiner {
@@ -133,9 +133,15 @@ void relabel_contiguously(part_vt labels, refine_data& rfd, mem_t& mem){
 	ordinal_t n = labels.extent(0);
     ordinal_t initial_count = rfd.label_count;
 	vtx_view_t used = Kokkos::subview(mem.s_mem.vtx1, std::make_pair((ordinal_t)0, initial_count));
+    Kokkos::deep_copy(exec_space(), used, 0);
+    // some vertices can have zero degree so some labels can have zero total degree
+    // therefore we can't use rfd.total_deg to determine which labels are in use
+	Kokkos::parallel_for("mark labels", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+		used(labels(i)) = 1;
+	});
     ordinal_t t_labels = 0;
 	Kokkos::parallel_scan("count labels", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-		if(rfd.total_deg(i) > 0){
+		if(used(i) > 0){
 			if(final) used(i) = update;
 			update++;
 		}
@@ -156,7 +162,7 @@ void relabel_contiguously(part_vt labels, refine_data& rfd, mem_t& mem){
 
 //determines which vertices (if any) should be moved to another part to decrease cutsize
 //8 kernels, 2 device-host syncs
-vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, bool initial){
+vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, bool skip_lock){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -389,7 +395,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             if(final){
                 swaps2(update) = pos_moves(i);
                 // don't maintain locks in coarsening phase
-                if(initial) lock_bit(pos_moves(i)) = 0;
+                if(skip_lock) lock_bit(pos_moves(i)) = 0;
             }
             update++;
         }

@@ -44,7 +44,7 @@
 #include <string>
 #include <map>
 
-namespace jet_partitioner {
+namespace jet_community {
 
 enum class Measurement : int {
 	Map,

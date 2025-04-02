@@ -43,7 +43,7 @@
 #include <string>
 #include <iostream>
 
-namespace jet_partitioner {
+namespace jet_community {
 
 bool load_config(config_t& c, const char* config_f) {
 

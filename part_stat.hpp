@@ -44,7 +44,7 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 
-namespace jet_partitioner {
+namespace jet_community {
 
 template<class crsMat, typename part_t>
 class part_stat {
