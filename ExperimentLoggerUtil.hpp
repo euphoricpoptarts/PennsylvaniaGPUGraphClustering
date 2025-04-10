@@ -47,22 +47,7 @@
 namespace jet_community {
 
 enum class Measurement : int {
-	Map,
-	Build,
-	Count,
-	Prefix,
-	Bucket,
-	Dedupe,
-	RadixSort,
-	RadixDedupe,
-    WriteGraph,
-	Permute,
-	MapConstruct,
-	Heavy,
-    InitTransfer,
-    HashmapAllocate,
-    HashmapInsert,
-    InitPartition,
+	Contract,
     Coarsen,
     Refine,
     FreeGraph,
@@ -75,22 +60,7 @@ class ExperimentLoggerUtil {
 
 public:
 	std::vector<std::string> measurementNames{
-		"coarsen-map",
-		"coarsen-build",
-		"coarsen-count",
-		"coarsen-prefix-sum",
-		"coarsen-bucket",
-		"coarsen-dedupe",
-		"coarsen-radix-sort",
-		"coarsen-radix-dedupe",
-        "coarsen-write-graph",
-		"coarsen-permute",
-		"coarsen-map-construct",
-		"heavy",
-        "initial-transfer-to-device",
-        "hashmap-allocate",
-        "hashmap-insert",
-        "initial-partition",
+		"coarsen-contract",
         "coarsen",
         "refine",
         "free-graph",
@@ -124,12 +94,8 @@ public:
 private:
 	int numCoarseLevels = 0;
 	std::vector<CoarseLevel> coarseLevels;
-    double imb_ratio = 0;
-    scalar_t fine_ec = 0;
-    scalar_t max_part_cut = 0;
-    scalar_t largest_part = 0;
-    scalar_t smallest_part = 0;
-    int64_t obj = 0;
+    scalar_t edge_cut = 0;
+    double modularity = -1.0;
 
 public:
 	ExperimentLoggerUtil() :
@@ -141,28 +107,12 @@ public:
 		numCoarseLevels++;
 	}
 
-	void setFinestEdgeCut(scalar_t finestEdgeCut) {
-		this->fine_ec = finestEdgeCut;
+	void setEdgeCut(scalar_t _edge_cut) {
+		edge_cut = _edge_cut;
 	}
 
-    void setMaxPartCut(scalar_t x){
-        this->max_part_cut = x;
-    }
-	
-    void setFinestImbRatio(double _imb_ratio) {
-		this->imb_ratio = _imb_ratio;
-	}
-
-    void setObjective(int64_t x){
-        this->obj = x;
-    }
-
-    void setLargestPartSize(scalar_t x){
-        this->largest_part = x;
-    }
-
-    void setSmallestPartSize(scalar_t x){
-        this->smallest_part = x;
+    void setModularity(double _modularity){
+        modularity = _modularity;
     }
 
 	void addMeasurement(Measurement m, double val) {
@@ -182,15 +132,12 @@ public:
 				f << "[";
 			}
 			f << "{";
-            f << "\"edge-cut\":" << std::fixed << fine_ec << ",";
-            f << "\"max-part-cut\":" << max_part_cut << ",";
-            f << "\"objective\":" << obj << ",";
-			f << "\"imbalance-ratio\":" << imb_ratio << ',';
+            f << "\"edge-cut\":" << std::fixed << edge_cut << ",";
+            f << "\"modularity\":" << modularity << ",";
 			for (int i = 0; i < static_cast<int>(Measurement::END); i++) {
 				f << "\"" << measurementNames[i] << "-duration-seconds\":" << measurements[i] << ",";
 			}
 			f << "\"number-coarse-levels\":" << numCoarseLevels << ",";
-            f << "\"finest-refinement-duration-seconds\":" << coarseLevels.back().totalRefTime;
 			f << "}";
 			if (!last) {
 				f << ",";
@@ -206,10 +153,8 @@ public:
 	}
 
     void verboseReport(){
-        std::cout << "Final cut: " << std::fixed << fine_ec;
-        std::cout << "; Max part cut: " << std::fixed << max_part_cut;
-        std::cout << "; imb: " << imb_ratio;
-        std::cout << "; largest: " << largest_part << "; smallest: " << smallest_part << std::endl;
+        std::cout << "Final cut: " << std::fixed << edge_cut;
+        std::cout << "; Modularity: " << std::fixed << modularity;
         std::cout << std::setprecision(5);
         std::cout << "Coarsening time: " << getMeasurement(Measurement::Coarsen) << std::endl;
         std::cout << " - Coarsening aggregation time: " << getMeasurement(Measurement::Map) << std::endl;
@@ -218,7 +163,6 @@ public:
         std::cout << "Uncoarsening time: " << getMeasurement(Measurement::Refine) << std::endl;
         std::cout << "Coarse graph free time: " << getMeasurement(Measurement::FreeGraph) << std::endl;
         std::cout << "Total Partitioning Time: " << getMeasurement(Measurement::Total) << std::endl;
-        std::cout << "Comm size: " << obj << std::endl;
     }
 
     void refinementReport(){

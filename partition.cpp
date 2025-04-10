@@ -41,6 +41,7 @@
 #include "io.hpp"
 #include "contract.hpp"
 #include "memory_store.hpp"
+#include "hec.hpp"
 #include <limits>
 #include <queue>
 
@@ -51,6 +52,7 @@ using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
 using clt = contracter_t::coarse_level_triple;
 using mem_t = memory_store<matrix_t, part_t>;
+using hec_t = coarsen_heuristics<matrix_t, part_t>;
 
 void connected_comps(matrix_t g, part_vt part_d){
     ordinal_t n = g.numRows();
@@ -122,7 +124,56 @@ matrix_t constraint_graph(const matrix_t& g, const part_vt& constraint, vtx_view
     return cg;
 }
 
-part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
+part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
+    std::vector<clt> levels;
+    std::vector<part_vt> parts;
+    levels.push_back(top);
+    rfd.init = true;
+    rfd.g_deg = top.mtx.nnz();
+    double aggregate = 0;
+    ref_t refiner;
+    while(true) {
+        clt c = levels[levels.size() - 1];
+        part_vt part = hec_t::coarsen_HEC(c.mtx, c.wdeg, constraint, mem, rfd);
+        parts.push_back(part);
+        if(rfd.label_count < c.mtx.numRows()){
+            Kokkos::Timer t;
+            contracter_t contracter;
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem, experiment);
+            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
+            part_vt next_constraint("next constraint", rfd.label_count);
+            Kokkos::parallel_for("set next", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+                ordinal_t label = part(i);
+                next_constraint(label) = constraint(i);
+            });
+            constraint = next_constraint;
+            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
+            levels.push_back(next_clt);
+            aggregate += t.seconds();
+        } else {
+            break;
+        }
+    }
+    rfd.cut = pstat::get_total_cut(levels.back().mtx, parts.back());
+    rfd.mod = pstat::modularity(rfd.g_deg,rfd.cut, rfd.total_deg);
+
+    std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
+    std::cout << rfd.mod << std::endl;
+    std::cout << rfd.label_count << std::endl;
+    
+    for(int i = levels.size() - 2; i >= 0; i--){
+        clt c = levels[i];
+        part_vt coarse_part = parts[i + 1];
+        part_vt part = parts[i];
+        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = coarse_part(part(x));
+        });
+        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
+    }
+    return parts[0];
+}
+
+part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
@@ -150,9 +201,6 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>&
             break;
         }
     }
-
-    std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
-    std::cout << rfd.mod << std::endl;
     
     for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
@@ -163,6 +211,9 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>&
         });
         refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
     }
+
+    experiment.addMeasurement(measurements::Contract, aggregate);
+    std::cout << rfd.mod << std::endl;
     return parts[0];
 }
 
@@ -222,10 +273,10 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, Experiment
     return parts[0];
 }
 
-part_vt partition(value_t& edge_cut,
-                                  matrix_t g,
-                                  wgt_view_t vweights,
-                                  ExperimentLoggerUtil<value_t>& experiment) {
+part_vt partition(matrix_t g,
+                    wgt_view_t vweights,
+                    double& mod,
+                    ExperimentLoggerUtil<value_t>& experiment) {
     rfd_t rfd;
     mem_t mem(g);
     clt c;
@@ -235,8 +286,12 @@ part_vt partition(value_t& edge_cut,
     Kokkos::fence();
     Kokkos::Timer t;
     std::cout << std::setprecision(6);
-    part_vt part = rec_part(mem, c, rfd, experiment);
-    std::cout << t.seconds() << std::endl;
+    part_vt part = louvain_part(mem, c, rfd, experiment);
+    double time = t.seconds();
+    experiment.setModularity(rfd.mod);
+    experiment.addMeasurement(Measurement::Total, time);
+    experiment.setEdgeCut(rfd.cut / 2);
+    std::cout << time << std::endl;
     if(false){
         double obj = rfd.mod;
         do {
@@ -244,22 +299,21 @@ part_vt partition(value_t& edge_cut,
             // connected_comps(g, part);
             // c.mtx = constraint_graph(g, part, refiner.get_entries_view());
             Kokkos::Timer x;
-            part = rec_part(mem, c, rfd, part, experiment);
+            part = leiden_part(mem, part, c, rfd, experiment);
             std::cout << x.seconds() << std::endl;
         } while(obj < rfd.mod);
     }
-    Kokkos::fence();
-    std::cout << t.seconds() << std::endl;
+    mod = rfd.mod;
     // connected_comps(g, part);
-    ordinal_t labels = pstat::get_total_labels(part);
-    std::cout << "Total labels " << labels << std::endl;
-    double modularity = pstat::modularity(g, part, labels, g.nnz());
-    std::cout << "Modularity: " << modularity << std::endl;
-    wgt_view_t vtx_w("vertex weights", g.numRows());
-    Kokkos::deep_copy(vtx_w, 1);
-    wgt_view_t part_sizes = pstat::get_part_sizes(g, vtx_w, part, labels);
-    std::cout << "Largest part: " << static_cast<double>(pstat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
-    edge_cut = pstat::get_total_cut(g, part);
+    // ordinal_t labels = pstat::get_total_labels(part);
+    // std::cout << "Total labels " << labels << std::endl;
+    // double modularity = pstat::modularity(g, part, labels, g.nnz());
+    // std::cout << "Modularity: " << modularity << std::endl;
+    // wgt_view_t vtx_w("vertex weights", g.numRows());
+    // Kokkos::deep_copy(vtx_w, 1);
+    // wgt_view_t part_sizes = pstat::get_part_sizes(g, vtx_w, part, labels);
+    // std::cout << "Largest part: " << static_cast<double>(pstat::largest_part_size(part_sizes)) / static_cast<double>(g.numRows()) << std::endl;
+    // edge_cut = pstat::get_total_cut(g, part);
     return part;
 }
 
@@ -273,14 +327,18 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <optional partition_output_filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <optional partition_output_filename> <optional metrics output filename>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
-    // char *part_file = nullptr;
-    // if(argc >= 3){
-    //     part_file = argv[2];
-    // }
+    char *part_file = nullptr;
+    if(argc >= 3){
+        part_file = argv[2];
+    }
+    char *metrics_file = nullptr;
+    if(argc >= 4){
+        metrics_file = argv[3];
+    }
 
     Kokkos::initialize(argc, argv);
     //must scope kokkos-related data
@@ -294,13 +352,23 @@ int main(int argc, char **argv) {
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
 
-        value_t edgecut = 0;
-        ExperimentLoggerUtil<value_t> experiment;
-        for(int i = 0; i < 1; i++){
-            part_vt part = partition(edgecut, g, vweights, experiment);
+        int iters = 21;
+        part_vt best_part;
+        double best_mod = -1;
+        for(int i = 0; i < iters; i++){
+            ExperimentLoggerUtil<value_t> experiment;
+            double mod;
+            part_vt part = partition(g, vweights, mod, experiment);
+            if(mod > best_mod){
+                best_mod = mod;
+                best_part = part;
+            }
+            if(metrics_file != nullptr){
+                experiment.log(metrics_file, i == 0, (i+1) == iters);
+            }
         }
 
-        // if(part_file != nullptr) write_part(part, part_file);
+        if(part_file != nullptr) write_part(best_part, part_file);
     }
     Kokkos::finalize();
 
