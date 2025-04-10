@@ -45,6 +45,18 @@
 #include "KokkosKernels_Uniform_Initialized_MemoryPool.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "memory_store.hpp"
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/tuple.h>
+
+struct is_nonnegative {
+    __host__ __device__
+    bool operator()(const thrust::tuple<int, int>& x){
+        return thrust::get<0>(x) >= 0;
+    }
+};
 
 namespace jet_community {
 
@@ -187,7 +199,7 @@ struct combineAndDedupe {
 
     KOKKOS_INLINE_FUNCTION
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u, const ordinal_t& i) const {
-            edge_offset_t offset = abs(xorshiftHash<ordinal_t>(u)) % size;
+            edge_offset_t offset = abs(xorshiftHash<ordinal_t>(u) % size);
             while(true){
                 if(htable(hash_start + offset) == -1){
                     if(Kokkos::atomic_compare_exchange(&htable(hash_start + offset), -1, u) == -1){
@@ -214,10 +226,9 @@ struct combineAndDedupe {
         const edge_offset_t size = hrow_map(i + 1) - hash_start;
         Kokkos::parallel_for(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t j){
             ordinal_t u = vcmap(g.graph.entries(j));
-            if(i != u){
-                edge_offset_t offset = insert(hash_start, size, u, i);
-                Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
-            }
+            if(i == u) return;
+            edge_offset_t offset = insert(hash_start, size, u, i);
+            Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
         });
     }
 
@@ -232,10 +243,9 @@ struct combineAndDedupe {
         const edge_offset_t size = hrow_map(i + 1) - hash_start;
         for(edge_offset_t j = start; j < end; j++){
             ordinal_t u = vcmap(g.graph.entries(j));
-            if(i != u){
-                edge_offset_t offset = insert(hash_start, size, u, i);
-                Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
-            }
+            if(i == u) continue;
+            edge_offset_t offset = insert(hash_start, size, u, i);
+            Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
         }
     }
 };
@@ -280,9 +290,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     Kokkos::deep_copy(exec_space(), hrow_map, 0);
     countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
-    Kokkos::fence();
-    experiment.addMeasurement(Measurement::Count, timer.seconds());
-    timer.reset();
     edge_offset_t hash_size = 0;
     //exclusive prefix sum
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
@@ -292,9 +299,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
         }
         update += val;
     }, hash_size);
-    Kokkos::fence();
-    experiment.addMeasurement(Measurement::Prefix, timer.seconds());
-    timer.reset();
     vtx_view_t htable = Kokkos::subview(mem.cd_mem.conn_entries, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), htable, -1);
     wgt_view_t hvals = Kokkos::subview(mem.cd_mem.conn_vals, std::make_pair((edge_offset_t)0, hash_size));
@@ -327,9 +331,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_scratch);
     Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd);
     Kokkos::parallel_for("deduplicate", policy_t(high, high + low), cnd);
-    Kokkos::fence();
-    experiment.addMeasurement(Measurement::Dedupe, timer.seconds());
-    timer.reset();
     edge_offset_t old_size = hash_size;
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
         edge_offset_t val = coarse_row_map_f(i);
@@ -340,15 +341,20 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     }, hash_size);
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
-    consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
-    Kokkos::parallel_scan("consolidate", policy_t(0, old_size), consolidate);
+    Kokkos::fence();
+    //consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
+    thrust::device_ptr<int> htb(htable.data());
+    thrust::device_ptr<int> hte = htb + old_size;
+    thrust::device_ptr<int> hvb(hvals.data());
+    thrust::device_ptr<int> hve = hvb + old_size;
+    thrust::device_ptr<int> ec(entries_coarse.data());
+    thrust::device_ptr<int> wc(wgts_coarse.data());
+    thrust::copy_if(thrust::device, thrust::make_zip_iterator(htb, hvb), thrust::make_zip_iterator(hte, hve), thrust::make_zip_iterator(ec, wc), is_nonnegative());
+    // Kokkos::parallel_scan("consolidate", policy_t(0, old_size), consolidate);
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
     next_level.mtx = gc;
-    Kokkos::fence();
-    experiment.addMeasurement(Measurement::WriteGraph, timer.seconds());
-    timer.reset();
     return next_level;
 }
 

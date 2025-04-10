@@ -152,19 +152,6 @@ public:
 		}
 	}
 
-    void verboseReport(){
-        std::cout << "Final cut: " << std::fixed << edge_cut;
-        std::cout << "; Modularity: " << std::fixed << modularity;
-        std::cout << std::setprecision(5);
-        std::cout << "Coarsening time: " << getMeasurement(Measurement::Coarsen) << std::endl;
-        std::cout << " - Coarsening aggregation time: " << getMeasurement(Measurement::Map) << std::endl;
-        std::cout << " - Coarsening contraction time: " << getMeasurement(Measurement::Build) << std::endl;
-        std::cout << "Initial partitioning time: " << getMeasurement(Measurement::InitPartition) << std::endl;
-        std::cout << "Uncoarsening time: " << getMeasurement(Measurement::Refine) << std::endl;
-        std::cout << "Coarse graph free time: " << getMeasurement(Measurement::FreeGraph) << std::endl;
-        std::cout << "Total Partitioning Time: " << getMeasurement(Measurement::Total) << std::endl;
-    }
-
     void refinementReport(){
         std::cout << std::setprecision(6);
         std::cout << std::left << std::setw(6) << "Level" << std::setw(16) << "Edge Cut" << std::setw(10) << "Imbalance";

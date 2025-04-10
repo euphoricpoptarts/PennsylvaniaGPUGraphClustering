@@ -212,7 +212,7 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
     }
 
-    experiment.addMeasurement(measurements::Contract, aggregate);
+    experiment.addMeasurement(Measurements::Contract, aggregate);
     std::cout << rfd.mod << std::endl;
     return parts[0];
 }
