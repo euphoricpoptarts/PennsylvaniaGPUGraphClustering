@@ -139,7 +139,7 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem, experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             part_vt next_constraint("next constraint", rfd.label_count);
             Kokkos::parallel_for("set next", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
@@ -158,6 +158,7 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
     rfd.mod = pstat::modularity(rfd.g_deg,rfd.cut, rfd.total_deg);
 
     std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
+    experiment.addMeasurement(Measurement::Contract, aggregate);
     std::cout << rfd.mod << std::endl;
     std::cout << rfd.label_count << std::endl;
     
@@ -192,7 +193,7 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem, experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
             levels.push_back(next_clt);
@@ -238,7 +239,7 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, Experiment
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
-            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem, experiment);
+            clt next_clt = contracter.build_coarse_graph(c, part, rfd.label_count, mem);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             part_vt next_constraint("active constraint", rfd.label_count);
             Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
@@ -258,7 +259,7 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, Experiment
         }
     }
 
-    std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
+    experiment.addMeasurement(Measurement::Contract, aggregate);
     std::cout << rfd.mod << std::endl;
     
     for(int i = levels.size() - 2; i >= 0; i--){

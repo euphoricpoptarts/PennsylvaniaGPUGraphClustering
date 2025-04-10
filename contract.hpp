@@ -120,33 +120,6 @@ public:
     ordinal_t min_allowed_vtx = 250;
     unsigned int max_levels = 200;
 
-bool should_use_dyn(const ordinal_t n, const Kokkos::View<const edge_offset_t*, Device> work, int t_count){
-    bool use_dyn = false;
-    edge_offset_t max = 0;
-    edge_offset_t min = std::numeric_limits<edge_offset_t>::max();
-    if(is_host_space){
-        ordinal_t static_size = (n + t_count) / t_count;
-        for(ordinal_t i = 0; i < t_count; i++){
-            ordinal_t start = i * static_size;
-            ordinal_t end = start + static_size;
-            if(start > n) start = n;
-            if(end > n) end = n;
-            edge_offset_t size = work(end) - work(start);
-            if(size > max){
-                max = size;
-            }
-            if(size < min) {
-                min = size;
-            }
-        }
-        //printf("min size: %i, max size: %i\n", min, max);
-        if(n > 500000 && max > 5*min){
-            use_dyn = true;
-        }
-    }
-    return use_dyn;
-}
-
 struct countingFunctor {
 
     matrix_t g;
@@ -250,37 +223,10 @@ struct combineAndDedupe {
     }
 };
 
-struct consolidateUnique {
-    vtx_view_t htable, entries_coarse;
-    wgt_view_t hvals, wgts_coarse;
-
-    consolidateUnique(vtx_view_t _htable,
-            vtx_view_t _entries_coarse,
-            wgt_view_t _hvals,
-            wgt_view_t _wgts_coarse) :
-            htable(_htable),
-            entries_coarse(_entries_coarse),
-            hvals(_hvals),
-            wgts_coarse(_wgts_coarse) {}
-
-    KOKKOS_INLINE_FUNCTION
-        void operator()(const edge_offset_t j, edge_offset_t& insert, const bool final) const
-    {
-        if(htable(j) > -1){
-            if(final){
-                entries_coarse(insert) = htable(j);
-                wgts_coarse(insert) = hvals(j);
-            }
-            insert++;
-        }
-    }
-};
-
 coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     const vtx_view_t vcmap,
     const ordinal_t nc,
-    mem_t& mem,
-    ExperimentLoggerUtil<scalar_t>& experiment) {
+    mem_t& mem) {
 
     matrix_t g = level.mtx;
     ordinal_t n = g.numRows();
@@ -342,7 +288,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();
-    //consolidateUnique consolidate(htable, entries_coarse, hvals, wgts_coarse);
     thrust::device_ptr<int> htb(htable.data());
     thrust::device_ptr<int> hte = htb + old_size;
     thrust::device_ptr<int> hvb(hvals.data());
@@ -350,7 +295,6 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     thrust::device_ptr<int> ec(entries_coarse.data());
     thrust::device_ptr<int> wc(wgts_coarse.data());
     thrust::copy_if(thrust::device, thrust::make_zip_iterator(htb, hvb), thrust::make_zip_iterator(hte, hve), thrust::make_zip_iterator(ec, wc), is_nonnegative());
-    // Kokkos::parallel_scan("consolidate", policy_t(0, old_size), consolidate);
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
