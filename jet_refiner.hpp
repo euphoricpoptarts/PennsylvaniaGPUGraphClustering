@@ -259,7 +259,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 }
             }
         }, argmax_reducer_t(am));
-        t.team_barrier();
         Kokkos::single(Kokkos::PerTeam(t), [=](){
             save_gains(i) = 0;
             part_t p = part(i);
@@ -353,7 +352,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 update -= (vpart == best) ? q : 0;
             }
         }, change);
-        t.team_barrier();
         Kokkos::single(Kokkos::PerTeam(t), [&](){
             if(igain + change >= 0){
                 lock_bit(i) = 1;
