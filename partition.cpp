@@ -169,7 +169,7 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
+        refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
     }
     return parts[0];
 }
@@ -188,7 +188,8 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, true, mem, experiment);
+        if(levels.size() == 1) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, true, mem, experiment);
+        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, true, mem, experiment);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -210,7 +211,8 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
+        if(i == 0) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
+        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
     }
 
     experiment.addMeasurement(Measurement::Contract, aggregate);
@@ -234,7 +236,7 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, Experiment
             part(x) = x;
         });
         matrix_t cg = constraint_graph(c.mtx, constraint, mem.cd_mem.conn_entries);
-        refiner.jet_refine(cg, c.wdeg, part, rfd, true, mem, experiment);
+        refiner.jet_refine<false>(cg, c.wdeg, part, rfd, true, mem, experiment);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -269,7 +271,7 @@ part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, Experiment
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
+        refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem, experiment);
     }
     return parts[0];
 }
