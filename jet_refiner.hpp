@@ -344,10 +344,10 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             //adjust local gain if v has higher priority than i
             if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
                 part_t vpart = dest_part(v);
-                scalar_t wgt = g.values(j);
-                float q;
-                if constexpr(uniform) q = 1.0 - multi*prob.wdeg(v);
-                else q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
                 update -= (vpart == p) ? q : 0;
                 update += (vpart == best) ? q : 0;
                 vpart = part(v);
@@ -376,10 +376,10 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             //adjust local gain if v has higher priority than i
             if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
                 part_t vpart = dest_part(v);
-                scalar_t wgt = g.values(j);
-                float q;
-                if constexpr(uniform) q = 1.0 - multi*prob.wdeg(v);
-                else q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
                 change -= (vpart == p) ? q : 0;
                 change += (vpart == best) ? q : 0;
                 vpart = part(v);
@@ -541,7 +541,8 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
             while(j + 1 < g.graph.row_map(i+1) && p == part(g.graph.entries(j+1))){
                 j++;
-                wgt += g.values(j);
+                if constexpr(uniform) wgt += 1;
+                else wgt += g.values(j);
             }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             part_t px = s_conn_entries[p_o];
