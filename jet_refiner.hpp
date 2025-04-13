@@ -950,15 +950,11 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     int iter_count = 0;
     Kokkos::fence();
     Kokkos::Timer iter_t;
-    //repeat until 12 phases since a significant
-    //improvement in cut or balance
-    //this accounts for at least 3 full lp+rebalancing cycles
     float filter_ratio = 0.75;
     bool use_big = true;
     int big_limit = 2;
     int limit = 6;
     bool skip = true;
-    // if(g.nnz() == best_state.g_deg && is_initial) limit = 5;
     if(!is_initial) big_limit = 0;
     int count = 0;
     while(count++ < limit){
