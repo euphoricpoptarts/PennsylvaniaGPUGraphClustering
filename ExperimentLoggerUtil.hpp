@@ -137,7 +137,7 @@ public:
 			for (int i = 0; i < static_cast<int>(Measurement::END); i++) {
 				f << "\"" << measurementNames[i] << "-duration-seconds\":" << measurements[i] << ",";
 			}
-			f << "\"number-coarse-levels\":" << numCoarseLevels << ",";
+			f << "\"number-coarse-levels\":" << numCoarseLevels;
 			f << "}";
 			if (!last) {
 				f << ",";
