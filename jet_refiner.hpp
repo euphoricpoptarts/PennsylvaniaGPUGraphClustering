@@ -406,16 +406,22 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     ordinal_t total_moves = swaps.extent(0);
     vtx_view_t swap_bit = mem.s_mem.zeros1;
     cdata_t& cdata = mem.cd_mem;
+    ordinal_t total = 0;
+    ordinal_t cutoff = 32;
+    vtx_view_t vtx1 = mem.s_mem.vtx1;
+    vtx_view_t dest_cache = mem.p_mem.dest_cache;
     Kokkos::parallel_for("mark", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = swaps(x);
         swap_bit(i) = 1;
     });
     // usually, but not always, faster than directly marking adjacencies of moved vertices, since we can break out of the loop
-    // also can't use a team here because we need to be able to exit the loop early
+    // also can't use a team here because we want to be able to exit the loop early
     Kokkos::parallel_for("check adjacent", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         if(swap_bit(i) == 1) return;
         //mark adjacent vertices
-        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+        edge_offset_t limit = g.graph.row_map(i) + cutoff;
+        if(g.graph.row_map(i+1) < limit) limit = g.graph.row_map(i+1);
+        for(edge_offset_t j = g.graph.row_map(i); j < limit; j++){
             ordinal_t v = g.graph.entries(j);
             if(swap_bit(v) == 1){
                 swap_bit(i) = 2;
@@ -423,10 +429,33 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
         }
     });
-    ordinal_t total = 0;
-    ordinal_t cutoff = 32;
-    vtx_view_t vtx1 = mem.s_mem.vtx1;
-    vtx_view_t dest_cache = mem.p_mem.dest_cache;
+    Kokkos::parallel_scan("collect vtx to be checked", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        if(swap_bit(i) == 0){
+            ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
+            if(degree >= cutoff){
+                if(final){
+                    vtx1(update) = i;
+                }
+                update++;
+            }
+        }
+    }, total);
+    Kokkos::parallel_for("check adjacent (large rows)", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        //mark adjacent vertices
+        ordinal_t marked = 0;
+        ordinal_t i = vtx1(t.league_rank());
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [=](const edge_offset_t j, ordinal_t& update){
+            if(update == 0){
+                ordinal_t v = g.graph.entries(j);
+                if(swap_bit(v) == 1){
+                    update++;
+                }
+            }
+        }, marked);
+        if(marked > 0){
+            swap_bit(i) = 2;
+        }
+    });
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(swap_bit(i)){
             ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
@@ -443,18 +472,26 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     }, total);
     vtx_view_t affected = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
     gain_vt pvals = mem.p_mem.pvals;
+    int max_size = 512;
     //recompute conn tables for each vertex adjacent to a moved vertex
-    Kokkos::parallel_for("reset conn DS", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("reset conn DS", team_policy_t(total, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(max_size*sizeof(gain_t) + max_size*sizeof(part_t))), KOKKOS_LAMBDA(const member& t){
         const ordinal_t i = affected(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
-        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
-            cdata.conn_entries(j) = NULL_PART;
-            cdata.conn_vals(j) = 0;
-        });
         part_t size = g_end - g_start;
-        part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
-        gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+        part_t* s_conn_entries;
+        gain_t* s_conn_vals;
+        if(size < max_size){
+            s_conn_entries = (part_t*) t.team_shmem().get_shmem(sizeof(part_t) * size);
+            s_conn_vals = (gain_t*) t.team_shmem().get_shmem(sizeof(gain_t) * size);
+        } else {
+            s_conn_entries = cdata.conn_entries.data() + g_start;
+            s_conn_vals = cdata.conn_vals.data() + g_start;
+        }
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, size), [&] (const edge_offset_t& j) {
+            s_conn_entries[j] = NULL_PART;
+            s_conn_vals[j] = 0;
+        });
         part_t p_i = part(i);
         t.team_barrier();
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j, gain_t& update){
@@ -488,6 +525,12 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, pvals(i));
+        if(size < max_size){
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
+                cdata.conn_entries(j) = s_conn_entries[j - g_start];
+                cdata.conn_vals(j) = s_conn_vals[j - g_start];
+            });
+        }
     });
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(swap_bit(i)){
