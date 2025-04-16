@@ -205,18 +205,21 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }
         part_t best = NO_MOVE;
         float wd = wdeg(i);
-        float b_conn = -100000.0;
-        gain_t bval = 0;
         float multi = wd*inv_2m;
+        part_t p = part(i);
+        float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
+        // b_conn must be at least this value to pass filter
+        float b_conn = p_conn - filter_ratio*(p_conn);
+        gain_t bval = 0;
         edge_offset_t start = c_graph.graph.row_map(i);
         edge_offset_t end = c_graph.graph.row_map(i+1);
         //finds potential destination as most connected part excluding p
         for(edge_offset_t j = start; j < end; j++){
             gain_t j_val = c_graph.values(j);
-            if(j_val > 0 && j_val > b_conn){
+            if(j_val > 0 && j_val >= b_conn){
                 part_t px = c_graph.graph.entries(j);
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
-                if(j_conn > b_conn){
+                if(j_conn >= b_conn){
                     b_conn = j_conn;
                     bval = j_val;
                     best = px;
@@ -225,18 +228,9 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }
         float gain = 0;
         if(best != NO_MOVE){
-            part_t p = part(i);
-            float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
-            float limit = p_conn - filter_ratio*(p_conn);
             // vertices must pass this filter in order to be considered further
-            // b_conn >= p_conn may seem redundant but it is important
-            // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
-            if(b_conn >= p_conn || (b_conn >= limit)){
-                gain = b_conn - p_conn;
-                bvals(i) = bval;
-            } else {
-                best = NO_MOVE;
-            }
+            gain = b_conn - p_conn;
+            bvals(i) = bval;
         }
         save_gains(i) = gain;
         dest_cache(i) = best;
@@ -249,14 +243,18 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         float multi = wd*inv_2m;
         edge_offset_t start = c_graph.graph.row_map(i);
         edge_offset_t end = c_graph.graph.row_map(i+1);
+        part_t p = part(i);
+        float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
+        // b_conn must be at least this value to pass filter
+        float limit = p_conn - filter_ratio*(p_conn);
         argmax_t am{-100000.0, end};
         //finds potential destination as most connected part excluding p
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, start, end), [=](const edge_offset_t j, argmax_t& local){
             gain_t j_val = c_graph.values(j);
-            if(j_val > 0 && j_val > local.val){
+            if(j_val > 0 && j_val >= limit && j_val > local.val){
                 part_t px = c_graph.graph.entries(j);
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
-                if(j_conn > local.val){
+                if(j_conn > local.val && j_conn >= limit){
                     local.val = j_conn;
                     local.loc = j;
                 }
@@ -264,22 +262,12 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }, argmax_reducer_t(am));
         Kokkos::single(Kokkos::PerTeam(t), [=](){
             float gain = 0;
-            part_t p = part(i);
             part_t best = NO_MOVE;
             if(am.loc >= start && am.loc < end){
                 float b_conn = am.val;
                 best = c_graph.graph.entries(am.loc);
-                float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
-                float limit = p_conn - filter_ratio*(p_conn);
-                // vertices must pass this filter in order to be considered further
-                // b_conn >= p_conn may seem redundant but it is important
-                // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
-                if(b_conn >= p_conn || (b_conn >= limit)){
-                    gain = b_conn - p_conn;
-                    bvals(i) = c_graph.values(am.loc);
-                } else {
-                    best = NO_MOVE;
-                }
+                gain = b_conn - p_conn;
+                bvals(i) = c_graph.values(am.loc);
             }
             save_gains(i) = gain;
             dest_cache(i) = best;
