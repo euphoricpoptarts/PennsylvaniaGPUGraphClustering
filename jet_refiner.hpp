@@ -98,6 +98,7 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr part_t NULL_PART = -1;
     static constexpr part_t HASH_RECLAIM = -2;
+    static constexpr part_t NO_MOVE = -3;
 
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -202,8 +203,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         if(!(dest_cache(i) == NULL_PART && lock_bit(i) == 0) || conn_table_sizes(i) > cutoff){
             return;
         }
-        part_t p = part(i);
-        part_t best = p;
+        part_t best = NO_MOVE;
         float wd = wdeg(i);
         float b_conn = -100000.0;
         gain_t bval = 0;
@@ -212,31 +212,33 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         edge_offset_t end = c_graph.graph.row_map(i+1);
         //finds potential destination as most connected part excluding p
         for(edge_offset_t j = start; j < end; j++){
-            float j_conn = c_graph.values(j);
-            if(j_conn > 0){
+            gain_t j_val = c_graph.values(j);
+            if(j_val > 0 && j_val > b_conn){
                 part_t px = c_graph.graph.entries(j);
-                j_conn -= static_cast<float>(total_deg(px))*multi;
+                float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                 if(j_conn > b_conn){
                     b_conn = j_conn;
-                    bval = c_graph.values(j);
+                    bval = j_val;
                     best = px;
                 }
             }
         }
-        save_gains(i) = 0;
-        if(best != p){
+        float gain = 0;
+        if(best != NO_MOVE){
+            part_t p = part(i);
             float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
             float limit = p_conn - filter_ratio*(p_conn);
             // vertices must pass this filter in order to be considered further
             // b_conn >= p_conn may seem redundant but it is important
             // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
             if(b_conn >= p_conn || (b_conn >= limit)){
-                save_gains(i) = b_conn - p_conn;
+                gain = b_conn - p_conn;
                 bvals(i) = bval;
             } else {
-                best = p;
+                best = NO_MOVE;
             }
         }
+        save_gains(i) = gain;
         dest_cache(i) = best;
         //a vertex is not considered further if best == p
         dest_part(i) = best;
@@ -250,10 +252,10 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         argmax_t am{-100000.0, end};
         //finds potential destination as most connected part excluding p
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, start, end), [=](const edge_offset_t j, argmax_t& local){
-            float j_conn = c_graph.values(j);
-            if(j_conn > 0){
+            gain_t j_val = c_graph.values(j);
+            if(j_val > 0 && j_val > local.val){
                 part_t px = c_graph.graph.entries(j);
-                j_conn -= static_cast<float>(total_deg(px))*multi;
+                float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                 if(j_conn > local.val){
                     local.val = j_conn;
                     local.loc = j;
@@ -261,9 +263,9 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             }
         }, argmax_reducer_t(am));
         Kokkos::single(Kokkos::PerTeam(t), [=](){
-            save_gains(i) = 0;
+            float gain = 0;
             part_t p = part(i);
-            part_t best = p;
+            part_t best = NO_MOVE;
             if(am.loc >= start && am.loc < end){
                 float b_conn = am.val;
                 best = c_graph.graph.entries(am.loc);
@@ -273,12 +275,13 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 // b_conn >= p_conn may seem redundant but it is important
                 // to address an edge case where floor(filter_ratio*p_conn) rounds to zero
                 if(b_conn >= p_conn || (b_conn >= limit)){
-                    save_gains(i) = b_conn - p_conn;
+                    gain = b_conn - p_conn;
                     bvals(i) = c_graph.values(am.loc);
                 } else {
-                    best = p;
+                    best = NO_MOVE;
                 }
             }
+            save_gains(i) = gain;
             dest_cache(i) = best;
             //a vertex is not considered further if best == p
             dest_part(i) = best;
@@ -292,9 +295,8 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     //output count of such vertices into num_pos
     vtx_view_t swap_scratch = vtx3;
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        part_t p = part(i);
         part_t best = dest_part(i);
-        if(p != best && lock_bit(i) == 0){
+        if(best != NO_MOVE && lock_bit(i) == 0){
             if(final){
                 swap_scratch(update) = i;
                 pregain(i) = save_gains(i);
