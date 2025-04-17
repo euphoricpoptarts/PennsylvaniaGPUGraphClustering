@@ -192,7 +192,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             update++;
         } else if(final){
             if(lock_bit(i)) {
-                dest_part(i) = part(i);
+                dest_part(i) = NO_MOVE;
             } else if(cache != NULL_PART) {
                 dest_part(i) = cache;
             }
