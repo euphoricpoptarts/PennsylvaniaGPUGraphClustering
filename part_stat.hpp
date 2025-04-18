@@ -79,11 +79,13 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr double penalty = 1.0;
 
-//data that is preserved between levels in the multilevel scheme
+// metadata that is preserved between levels in the multilevel scheme
 struct refine_data {
     gain_vt total_deg;
     scalar_t g_deg = 0;
     gain_t cut = 0;
+    // except for this one
+    gain_t last_pval = 0;
     double mod = -1.0;
     part_t label_count;
     bool init = false;

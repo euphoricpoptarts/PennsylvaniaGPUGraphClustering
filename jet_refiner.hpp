@@ -161,7 +161,7 @@ void relabel_contiguously(part_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
-//determines which vertices (if any) should be moved to another part to decrease cutsize
+//determines which vertices (if any) should be moved to another part to improve objective
 //8 kernels, 2 device-host syncs
 template <bool uniform>
 vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, bool skip_lock){
@@ -746,6 +746,16 @@ static gain_t lookup(const part_t* keys, const gain_t* vals, const part_t& targe
     return 0;
 }
 
+gain_t pval_sum(gain_vt pvals, ordinal_t n){
+    // this works well for large vertex swap counts
+    // perhaps the old approach could be useful for small vertex swap counts (specifically during the uncoarsening pass)
+    gain_t sum = 0;
+    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i, gain_t& gain_update){
+        gain_update += pvals(i);
+    }, sum);
+    return sum;
+}
+
 //perform swaps, update gains, and compute change to cut and imbalance
 //4 kernels, 1 device-host syncs
 template <bool uniform>
@@ -764,11 +774,6 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
         Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
         Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
     });
-    // this works well for large vertex swap counts
-    // perhaps the old approach could be useful for small vertex swap counts (specifically during the uncoarsening pass)
-    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, prob.g.numRows()), KOKKOS_LAMBDA(const ordinal_t& i, gain_t& gain_update){
-        gain_update += pvals(i);
-    }, mem.s_mem.cut_change1);
     //change part assignments and update part sizes
     if(!cdata.init || use_big || total_moves >= prob.g.numRows() * 0.1){
         // update cluster ids before updating datastructures
@@ -787,12 +792,9 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
         // cluster ids updated inside this function
         update_small<uniform>(prob, part, swaps, dest_part, mem);
     }
-    Kokkos::parallel_reduce("count cutsize change part2", policy_t(0, prob.g.numRows()), KOKKOS_LAMBDA(const ordinal_t& i, gain_t& gain_update){
-        gain_update += pvals(i);
-    }, mem.s_mem.cut_change2);
-    exec_space().fence();
-    // cut change is equal to newly covered edge count
-    int64_t cut_change = mem.s_mem.cut_change2() - mem.s_mem.cut_change1();
+    gain_t curr_pval = pval_sum(pvals, prob.g.numRows());
+    int64_t cut_change = curr_pval - curr_state.last_pval;
+    curr_state.last_pval = curr_pval;
     curr_state.cut -= cut_change;
 }
 
@@ -959,6 +961,9 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(g, part, mem);
+        curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
+    } else {
+        curr_state.last_pval = 0;
     }
     int iter_count = 0;
     Kokkos::fence();
