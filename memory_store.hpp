@@ -51,7 +51,7 @@ struct memory_store {
     // this struct contains memory for persistent state across lp iterations
     struct persistent {
         obj_vt gain_persistent;
-        gain_vt pvals, bvals;
+        gain_vt pvals;
         part_vt part, dest_part;
         vtx_view_t lock_bit;
         part_vt dest_cache;
@@ -59,7 +59,6 @@ struct memory_store {
         persistent(const ordinal_t n){
             gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
             pvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals"), n);
-            bvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("b vals"), n);
             part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
             dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             lock_bit = vtx_view_t("lock bit", n);
@@ -69,7 +68,6 @@ struct memory_store {
         persistent(const persistent& source, const ordinal_t n){
             gain_persistent = Kokkos::subview(source.gain_persistent, std::make_pair(static_cast<ordinal_t>(0), n));
             pvals = Kokkos::subview(source.pvals, std::make_pair(static_cast<ordinal_t>(0), n));
-            bvals = Kokkos::subview(source.bvals, std::make_pair(static_cast<ordinal_t>(0), n));
             part = Kokkos::subview(source.part, std::make_pair(static_cast<ordinal_t>(0), n));
             dest_part = Kokkos::subview(source.dest_part, std::make_pair(static_cast<ordinal_t>(0), n));
             lock_bit = Kokkos::subview(source.lock_bit, std::make_pair(static_cast<ordinal_t>(0), n));
