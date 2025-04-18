@@ -177,7 +177,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     cdata_t& cdata = mem.cd_mem;
     part_vt conn_table_sizes = cdata.conn_table_sizes;
     gain_vt pvals = mem.p_mem.pvals;
-    gain_vt bvals = mem.p_mem.bvals;
     float inv_2m = 1.0 / static_cast<float>(rfd.g_deg);
     ordinal_t cutoff = 128;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
@@ -210,7 +209,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
         // b_conn must be at least this value to pass filter
         float b_conn = p_conn - filter_ratio*(p_conn);
-        gain_t bval = 0;
         edge_offset_t start = c_graph.graph.row_map(i);
         edge_offset_t end = c_graph.graph.row_map(i+1);
         //finds potential destination as most connected part excluding p
@@ -221,7 +219,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                 if(j_conn >= b_conn){
                     b_conn = j_conn;
-                    bval = j_val;
                     best = px;
                 }
             }
@@ -230,7 +227,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         if(best != NO_MOVE){
             // vertices must pass this filter in order to be considered further
             gain = b_conn - p_conn;
-            bvals(i) = bval;
         }
         save_gains(i) = gain;
         dest_cache(i) = best;
@@ -267,7 +263,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 float b_conn = am.val;
                 best = c_graph.graph.entries(am.loc);
                 gain = b_conn - p_conn;
-                bvals(i) = c_graph.values(am.loc);
             }
             save_gains(i) = gain;
             dest_cache(i) = best;
@@ -760,33 +755,27 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
     ordinal_t total_moves = swaps.extent(0);
     cdata_t& cdata = mem.cd_mem;
     gain_vt pvals = mem.p_mem.pvals;
-    gain_vt bvals = mem.p_mem.bvals;
     vtx_view_t dest_cache = mem.p_mem.dest_cache;
-    //total change in cutsize = (sum over all moves) -((new_b_con - new_p_con) + (old_b_con - old_p_con))
-    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
+    Kokkos::parallel_for("update total deg", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x){
         ordinal_t i = swaps(x);
         part_t best = dest_part(i);
         part_t p = part(i);
-        // edges of this vertex in p before moving
-        gain_t p_con = pvals(i);
-        // edges of this vertex in best before moving
-        // this is stored by an earlier lookup because the lookup is very expensive for the initial pass
-        // in fact the hashtables are not always initialized in the first iteration so this is mandatory
-        gain_t b_con = bvals(i);
-        gain_update += b_con - p_con;
         dest_cache(i) = NULL_PART;
         Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
         Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
+    });
+    // this works well for large vertex swap counts
+    // perhaps the old approach could be useful for small vertex swap counts (specifically during the uncoarsening pass)
+    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, prob.g.numRows()), KOKKOS_LAMBDA(const ordinal_t& i, gain_t& gain_update){
+        gain_update += pvals(i);
     }, mem.s_mem.cut_change1);
     //change part assignments and update part sizes
     if(!cdata.init || use_big || total_moves >= prob.g.numRows() * 0.1){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
-            part_t p = part(i);
             part_t best = dest_part(i);
             part(i) = best;
-            dest_part(i) = p;
         });
         if(!cdata.init){
             init_conn_graph<uniform>(prob.g, part, mem);
@@ -798,21 +787,12 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
         // cluster ids updated inside this function
         update_small<uniform>(prob, part, swaps, dest_part, mem);
     }
-    Kokkos::parallel_reduce("count cutsize change part2", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x, gain_t& gain_update){
-        ordinal_t i = swaps(x);
-        part_t p = dest_part(i);
-        part_t best = part(i);
-        edge_offset_t start = cdata.conn_offsets(i);
-        part_t size = cdata.conn_table_sizes(i);
-        // edges of other vertices in p connecting to this vertex after moving
-        // this lookup is cheaper now since the hashtables should be less full
-        gain_t p_con = lookup(cdata.conn_entries.data() + start, cdata.conn_vals.data() + start, p, size);
-        // edges of other vertices in best connecting to this vertex after moving
-        gain_t b_con = pvals(i);
-        gain_update += b_con - p_con;
+    Kokkos::parallel_reduce("count cutsize change part2", policy_t(0, prob.g.numRows()), KOKKOS_LAMBDA(const ordinal_t& i, gain_t& gain_update){
+        gain_update += pvals(i);
     }, mem.s_mem.cut_change2);
     exec_space().fence();
-    int64_t cut_change = mem.s_mem.cut_change2() + mem.s_mem.cut_change1();
+    // cut change is equal to newly covered edge count
+    int64_t cut_change = mem.s_mem.cut_change2() - mem.s_mem.cut_change1();
     curr_state.cut -= cut_change;
 }
 
