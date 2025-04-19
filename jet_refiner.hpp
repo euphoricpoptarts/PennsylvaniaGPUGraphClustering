@@ -759,7 +759,7 @@ gain_t pval_sum(gain_vt pvals, ordinal_t n){
 //perform swaps, update gains, and compute change to cut and imbalance
 //4 kernels, 1 device-host syncs
 template <bool uniform>
-void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, mem_t& mem, refine_data& curr_state, bool use_big){
+void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, mem_t& mem, refine_data& curr_state){
     const wgt_view_t& wdeg = prob.wdeg;
     vtx_view_t dest_part = mem.p_mem.dest_part;
     ordinal_t total_moves = swaps.extent(0);
@@ -775,7 +775,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
         Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
     });
     //change part assignments and update part sizes
-    if(!cdata.init || use_big || total_moves >= prob.g.numRows() * 0.1){
+    if(!cdata.init || total_moves >= prob.g.numRows() * 0.1){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
@@ -969,15 +969,11 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     Kokkos::fence();
     Kokkos::Timer iter_t;
     float filter_ratio = 0.75;
-    bool use_big = true;
-    int big_limit = 2;
     int limit = 6;
     bool skip = true;
-    if(!is_initial) big_limit = 0;
     int count = 0;
     while(count++ < limit){
         iter_count++;
-        if(iter_count > big_limit) use_big = false;
         vtx_view_t moves;
         matrix_t c_graph = mem.cd_mem.c_graph;
         if(!mem.cd_mem.init){
@@ -986,7 +982,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
         }
         moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio, skip);
         if(moves.extent(0) == 0) break;
-        perform_moves<uniform>(prob, part, moves, mem, curr_state, use_big);
+        perform_moves<uniform>(prob, part, moves, mem, curr_state);
         curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
         // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
         //copy current partition and relevant data to output partition if following conditions pass
