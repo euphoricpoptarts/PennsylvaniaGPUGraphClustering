@@ -185,10 +185,12 @@ static double modularity(const matrix_t g, const part_vt labels, const ordinal_t
 static double modularity(const scalar_t g_degree, const scalar_t cutsize, const gain_vt total){
     double m = 0;
     Kokkos::parallel_reduce("sum modularity", policy_t(0, total.size()), KOKKOS_LAMBDA(const ordinal_t l, double& update){
-        double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
-        update -= penalty*(total_ratio*total_ratio);
+        double total_ratio = static_cast<double>(total(l));
+        update -= total_ratio*total_ratio;
     }, m);
-    m += 1.0 - static_cast<double>(cutsize) / static_cast<double>(g_degree);
+    double inv_gdeg = 1.0 / static_cast<double>(g_degree);
+    m = m*penalty*inv_gdeg*inv_gdeg;
+    m += 1.0 - static_cast<double>(cutsize) * inv_gdeg;
     return m;
 }
 
