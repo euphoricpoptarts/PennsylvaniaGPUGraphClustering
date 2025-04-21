@@ -54,7 +54,6 @@ struct memory_store {
         gain_vt pvals;
         part_vt part, dest_part;
         vtx_view_t lock_bit;
-        part_vt dest_cache;
 
         persistent(const ordinal_t n){
             gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
@@ -62,7 +61,6 @@ struct memory_store {
             part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
             dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             lock_bit = vtx_view_t("lock bit", n);
-            dest_cache = part_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
         }
 
         persistent(const persistent& source, const ordinal_t n){
@@ -71,7 +69,6 @@ struct memory_store {
             part = Kokkos::subview(source.part, std::make_pair(static_cast<ordinal_t>(0), n));
             dest_part = Kokkos::subview(source.dest_part, std::make_pair(static_cast<ordinal_t>(0), n));
             lock_bit = Kokkos::subview(source.lock_bit, std::make_pair(static_cast<ordinal_t>(0), n));
-            dest_cache = Kokkos::subview(source.dest_cache, std::make_pair(static_cast<ordinal_t>(0), n));
         }
     };
 
