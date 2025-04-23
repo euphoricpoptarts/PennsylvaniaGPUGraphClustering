@@ -244,7 +244,9 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
             hrow_map(i) = update;
         }
         update += val;
-    }, hash_size);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    hash_size = mem.s_mem.scan_host();
     vtx_view_t htable = Kokkos::subview(mem.cd_mem.conn_entries, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), htable, -1);
     wgt_view_t hvals = Kokkos::subview(mem.cd_mem.conn_vals, std::make_pair((edge_offset_t)0, hash_size));
@@ -264,7 +266,9 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
             }
             update++;
         }
-    }, high);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    high = mem.s_mem.scan_host();
     Kokkos::parallel_scan("compact low degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
         if(degree < limit){
@@ -273,7 +277,9 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
             }
             update++;
         }
-    }, low);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    low = mem.s_mem.scan_host();
     combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_scratch);
     Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd);
     Kokkos::parallel_for("deduplicate", policy_t(high, high + low), cnd);
@@ -284,7 +290,9 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
             coarse_row_map_f(i) = update;
         }
         update += val;
-    }, hash_size);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    hash_size = mem.s_mem.scan_host();
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();

@@ -189,7 +189,9 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             }
             update++;
         }
-    }, num_pos);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    num_pos = mem.s_mem.scan_host();
     vtx_view_t large_tables = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     Kokkos::parallel_for("select destination part (small tables)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
         if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0) || conn_table_sizes(i) > cutoff){
@@ -301,7 +303,9 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         } else if(final){
             vtx1(n - 1 + update - x) = i;
         }
-    }, big);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    big = mem.s_mem.scan_host();
     vtx_view_t big_rows = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), big));
     vtx_view_t small_rows = Kokkos::subview(vtx1, std::make_pair(n - (num_pos - big), n));
     float eps = 0.1;
@@ -425,7 +429,9 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
                 update++;
             }
         }
-    }, total);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    total = mem.s_mem.scan_host();
     Kokkos::parallel_for("check adjacent (large rows)", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         //mark adjacent vertices
         ordinal_t marked = 0;
@@ -455,7 +461,9 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
                 update++;
             }
         }
-    }, total);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    total = mem.s_mem.scan_host();
     vtx_view_t affected = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
     gain_vt pvals = mem.p_mem.pvals;
     int max_size = 512;
@@ -531,7 +539,9 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
                 update++;
             }
         }
-    }, total);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    total = mem.s_mem.scan_host();
     affected = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
     Kokkos::parallel_for("reset conn DS", policy_t(0, total), KOKKOS_LAMBDA(const ordinal_t x){
         const ordinal_t i = affected(x);
@@ -808,7 +818,9 @@ void init_conn_graph(const matrix_t& g, const part_vt& part, mem_t& mem){
         } else if(final){
             vtx1(n - 1 - (i - update)) = i;
         }
-    }, total);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    total = mem.s_mem.scan_host();
     vtx_view_t big = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
     Kokkos::parallel_for("init conn DS", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big(t.league_rank());
@@ -914,7 +926,9 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
         if(final && i + 1 == n){
             cdata.conn_offsets(n) = update;
         }
-    }, gain_size);
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    gain_size = mem.s_mem.scan_host();
     cdata.conn_vals = Kokkos::subview(cdata.conn_vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.conn_entries = Kokkos::subview(cdata.conn_entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.c_graph = matrix_t("conn graph", g.numRows(), g.numRows(), gain_size, cdata.conn_vals, cdata.conn_offsets, cdata.conn_entries);
