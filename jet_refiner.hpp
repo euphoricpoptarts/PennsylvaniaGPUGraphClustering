@@ -287,11 +287,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     num_pos = mem.s_mem.scan_host();
     //truncate scratch views by num_pos
     vtx_view_t pos_moves = Kokkos::subview(swap_scratch, std::make_pair(static_cast<ordinal_t>(0), num_pos));
-    //in this kernel every potential move from the previous filters
-    //is reevaluated by considering the effect of the other potential moves
-    //a move is considered to occur before another according to their potential gains
-    //and the vertex ids
-    ordinal_t big = 0;
     cutoff = 128;
     Kokkos::parallel_scan("filter out locked and find large tables", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         ordinal_t i = pos_moves(x);
@@ -305,10 +300,14 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
-    big = mem.s_mem.scan_host();
+    ordinal_t big = mem.s_mem.scan_host();
     vtx_view_t big_rows = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), big));
     vtx_view_t small_rows = Kokkos::subview(vtx1, std::make_pair(n - (num_pos - big), n));
     float eps = 0.1;
+    //in this kernel every potential move from the previous filters
+    //is reevaluated by considering the effect of the other potential moves
+    //a move is considered to occur before another according to their potential gains
+    //and the vertex ids
     Kokkos::parallel_for("afterburner heuristic", team_policy_t(big, 256), KOKKOS_LAMBDA(const member& t){
         float change = 0;
         ordinal_t i = big_rows(t.league_rank());
