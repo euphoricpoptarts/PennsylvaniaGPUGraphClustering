@@ -75,9 +75,9 @@ struct memory_store {
     // this struct contains memory which does not require initialization between lp iterations
     struct scratch {
         obj_vt obj1;
-        vtx_view_t vtx1, vtx2, vtx3;
+        vtx_view_t vtx1, vtx2, vtx3, vtx4;
         vtx_view_t zeros1;
-        vtx_pin_st scan_host;
+        vtx_pin_st scan_host, pin_host;
         gain_pin_st cut_change1, cut_change2;
         gain_pin_vt reduce_locs;
 
@@ -86,8 +86,10 @@ struct memory_store {
             vtx1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
             vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
             vtx3 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 3"), n);
+            vtx4 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 4"), n);
             zeros1 = vtx_view_t("zeros 1", n);
             scan_host = vtx_pin_st("scan host");
+            pin_host = vtx_pin_st("pin host");
             reduce_locs = gain_pin_vt("reduce to here", 2);
             cut_change1 = Kokkos::subview(reduce_locs, 0);
             cut_change2 = Kokkos::subview(reduce_locs, 1);
