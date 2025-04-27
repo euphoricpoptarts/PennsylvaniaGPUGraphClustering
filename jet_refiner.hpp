@@ -270,7 +270,6 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     obj_vt pregain = mem.s_mem.obj1;
     ordinal_t big_begin = prob.offset128;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
-    pin_host() = -1;
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
     // vtx3 is already organized into two buckets by degree > or <= 128
@@ -295,8 +294,11 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     num_pos = mem.s_mem.scan_host();
     //truncate scratch views by num_pos
     vtx_view_t pos_moves = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
-    big_begin = pin_host();
-    if(big_begin == -1) big_begin = num_pos;
+    if(big_begin < n){
+        big_begin = pin_host();
+    } else {
+        big_begin = num_pos;
+    }
     ordinal_t small = big_begin;
     ordinal_t big = num_pos - small;
     vtx_view_t big_rows = Kokkos::subview(vtx1, std::make_pair(big_begin, num_pos));
@@ -448,7 +450,6 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     });
     ordinal_t big_begin = prob.offset32;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
-    pin_host() = -1;
     // vtx4 is already organized into two buckets by degree > or <= 32
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
@@ -467,8 +468,11 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     }, mem.s_mem.scan_host);
     exec_space().fence();
     total = mem.s_mem.scan_host();
-    big_begin = pin_host();
-    if(big_begin == -1) big_begin = total;
+    if(big_begin < g.numRows()){
+        big_begin = pin_host();
+    } else {
+        big_begin = total;
+    }
     ordinal_t small = big_begin;
     ordinal_t big = total - small;
     vtx_view_t big_rows = Kokkos::subview(vtx1, std::make_pair(big_begin, total));
@@ -772,7 +776,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
             part(i) = best;
         });
         if(!cdata.init){
-            init_conn_graph<uniform>(prob.g, part, mem);
+            init_conn_graph<uniform>(prob, part, mem);
             Kokkos::deep_copy(exec_space(), dest_part, NULL_PART);
         } else {
             update_large<uniform>(prob, part, swaps, mem);
@@ -789,7 +793,8 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
 
 //initialize conn hash tables for each vertex
 template <bool uniform>
-void init_conn_graph(const matrix_t& g, const part_vt& part, mem_t& mem){
+void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
+    const matrix_t& g = prob.g;
     cdata_t& cdata = mem.cd_mem;
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
@@ -797,23 +802,10 @@ void init_conn_graph(const matrix_t& g, const part_vt& part, mem_t& mem){
     ordinal_t cutoff = 32;
     ordinal_t total = 0;
     ordinal_t n = g.numRows();
-    vtx_view_t vtx1 = mem.s_mem.vtx1;
+    vtx_view_t vtx4 = mem.s_mem.vtx4;
     gain_vt pvals = mem.p_mem.pvals;
-    Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
-        if(degree >= cutoff){
-            if(final){
-                vtx1(update) = i;
-            }
-            update++;
-        } else if(final){
-            vtx1(n - 1 - (i - update)) = i;
-        }
-    }, mem.s_mem.scan_host);
-    exec_space().fence();
-    total = mem.s_mem.scan_host();
-    vtx_view_t big = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), total));
-    Kokkos::parallel_for("init conn DS", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+    vtx_view_t big = Kokkos::subview(vtx4, std::make_pair(prob.offset32, n));
+    Kokkos::parallel_for("init conn DS", team_policy_t(n - prob.offset32, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
@@ -852,8 +844,8 @@ void init_conn_graph(const matrix_t& g, const part_vt& part, mem_t& mem){
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, pvals(i));
     });
-    vtx_view_t small = Kokkos::subview(vtx1, std::make_pair(total, n));
-    Kokkos::parallel_for("init conn DS", policy_t(0, n - total), KOKKOS_LAMBDA(const ordinal_t x){
+    vtx_view_t small = Kokkos::subview(vtx4, std::make_pair(static_cast<ordinal_t>(0), prob.offset32));
+    Kokkos::parallel_for("init conn DS", policy_t(0, prob.offset32), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = small(x);
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
@@ -907,6 +899,9 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
         cdata.conn_offsets(i) = degree;
         cdata.conn_table_sizes(i) = degree;
     });
+    // rather than organizing vertices into 3 buckets
+    // organize vertices into two different sets of two buckets each
+    // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
     vtx_view_t vtx3 = mem.s_mem.vtx3;
     Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
@@ -977,7 +972,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     Kokkos::deep_copy(exec_space(), part, best_part);
     truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(g, part, mem);
+        init_conn_graph<uniform>(prob, part, mem);
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;
