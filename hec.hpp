@@ -119,7 +119,7 @@ public:
                     }
                 }
             });
-            vtx_vt vtx3 = mem.s_mem.vtx3;
+            vtx_vt vtx3 = mem.p_mem.order1;
             Kokkos::parallel_scan(policy_t(0, perm_length), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final) {
                 ordinal_t u = perm_length == n ? i : curr_perm(i);
                 if (vcmap(u) >= n) {

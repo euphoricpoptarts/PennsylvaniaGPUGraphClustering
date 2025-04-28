@@ -181,7 +181,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     ordinal_t cutoff = 128;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
     vtx_view_t vtx2 = mem.s_mem.vtx2;
-    vtx_view_t vtx3 = mem.s_mem.vtx3;
+    vtx_view_t order1 = mem.p_mem.order1;
     Kokkos::parallel_scan("filter out locked and find large tables", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         part_t cache = dest_part(i);
         if(cache == NULL_PART && lock_bit(i) == 0 && conn_table_sizes(i) > cutoff){
@@ -272,12 +272,12 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
-    // vtx3 is already organized into two buckets by degree > or <= 128
+    // order1 is already organized into two buckets by degree > or <= 128
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
         }
-        ordinal_t i = vtx3(x);
+        ordinal_t i = order1(x);
         part_t best = dest_part(i);
         if(best != NO_MOVE && lock_bit(i) == 0){
             if(final){
@@ -398,7 +398,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     ordinal_t total = 0;
     ordinal_t cutoff = 32;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
-    vtx_view_t vtx4 = mem.s_mem.vtx4;
+    vtx_view_t order2 = mem.p_mem.order2;
     vtx_view_t dest_cache = mem.p_mem.dest_part;
     Kokkos::parallel_for("mark", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = swaps(x);
@@ -450,12 +450,12 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     });
     ordinal_t big_begin = prob.offset32;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
-    // vtx4 is already organized into two buckets by degree > or <= 32
+    // order2 is already organized into two buckets by degree > or <= 32
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
         }
-        ordinal_t i = vtx4(x);
+        ordinal_t i = order2(x);
         if(swap_bit(i)){
             if(final){
                 vtx1(update) = i;
@@ -802,9 +802,10 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
     ordinal_t cutoff = 32;
     ordinal_t total = 0;
     ordinal_t n = g.numRows();
-    vtx_view_t vtx4 = mem.s_mem.vtx4;
+    vtx_view_t order2 = mem.p_mem.order2;
     gain_vt pvals = mem.p_mem.pvals;
-    vtx_view_t big = Kokkos::subview(vtx4, std::make_pair(prob.offset32, n));
+    vtx_view_t big = Kokkos::subview(order2, std::make_pair(prob.offset32, n));
+    vtx_view_t small = Kokkos::subview(order2, std::make_pair(static_cast<ordinal_t>(0), prob.offset32));
     Kokkos::parallel_for("init conn DS", team_policy_t(n - prob.offset32, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
@@ -844,7 +845,6 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, pvals(i));
     });
-    vtx_view_t small = Kokkos::subview(vtx4, std::make_pair(static_cast<ordinal_t>(0), prob.offset32));
     Kokkos::parallel_for("init conn DS", policy_t(0, prob.offset32), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = small(x);
         edge_offset_t g_start = cdata.conn_offsets(i);
@@ -902,28 +902,28 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
     // rather than organizing vertices into 3 buckets
     // organize vertices into two different sets of two buckets each
     // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
-    vtx_view_t vtx3 = mem.s_mem.vtx3;
+    vtx_view_t order1 = mem.p_mem.order1;
     Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(degree <= 128){
             if(final){
-                vtx3(update) = i;
+                order1(update) = i;
             }
             update++;
         } else if(final){
-            vtx3(n - 1 - (i - update)) = i;
+            order1(n - 1 - (i - update)) = i;
         }
     }, prob.offset128);
-    vtx_view_t vtx4 = mem.s_mem.vtx4;
+    vtx_view_t order2 = mem.p_mem.order2;
     Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(degree < 32){
             if(final){
-                vtx4(update) = i;
+                order2(update) = i;
             }
             update++;
         } else if(final){
-            vtx4(n - 1 - (i - update)) = i;
+            order2(n - 1 - (i - update)) = i;
         }
     }, prob.offset32);
     edge_offset_t gain_size = 0;

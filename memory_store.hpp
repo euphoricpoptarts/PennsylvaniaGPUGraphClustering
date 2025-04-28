@@ -53,6 +53,7 @@ struct memory_store {
         obj_vt gain_persistent;
         gain_vt pvals;
         part_vt part, dest_part;
+        vtx_view_t order1, order2;
         vtx_view_t lock_bit;
 
         persistent(const ordinal_t n){
@@ -61,6 +62,8 @@ struct memory_store {
             part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
             dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             lock_bit = vtx_view_t("lock bit", n);
+            order1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 1"), n);
+            order2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 2"), n);
         }
 
         persistent(const persistent& source, const ordinal_t n){
@@ -69,13 +72,15 @@ struct memory_store {
             part = Kokkos::subview(source.part, std::make_pair(static_cast<ordinal_t>(0), n));
             dest_part = Kokkos::subview(source.dest_part, std::make_pair(static_cast<ordinal_t>(0), n));
             lock_bit = Kokkos::subview(source.lock_bit, std::make_pair(static_cast<ordinal_t>(0), n));
+            order1 = source.order1;
+            order2 = source.order2;
         }
     };
 
     // this struct contains memory which does not require initialization between lp iterations
     struct scratch {
         obj_vt obj1;
-        vtx_view_t vtx1, vtx2, vtx3, vtx4;
+        vtx_view_t vtx1, vtx2;
         vtx_view_t zeros1;
         vtx_pin_st scan_host, pin_host;
         gain_pin_st cut_change1, cut_change2;
@@ -85,8 +90,6 @@ struct memory_store {
             obj1 = obj_vt(Kokkos::ViewAllocateWithoutInitializing("obj scratch 1"), n);
             vtx1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
             vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
-            vtx3 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 3"), n);
-            vtx4 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 4"), n);
             zeros1 = vtx_view_t("zeros 1", n);
             scan_host = vtx_pin_st("scan host");
             pin_host = vtx_pin_st("pin host");
