@@ -798,8 +798,6 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
     Kokkos::deep_copy(exec_space(), cdata.conn_entries, NULL_PART);
-    ordinal_t cutoff = 32;
-    ordinal_t total = 0;
     ordinal_t n = g.numRows();
     vtx_view_t order2 = mem.p_mem.order2;
     gain_vt pvals = mem.p_mem.pvals;
