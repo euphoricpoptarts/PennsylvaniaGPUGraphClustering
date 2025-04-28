@@ -1003,6 +1003,8 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
         }
     }
     Kokkos::fence();
+    input_mem.p_mem.offset_mid = mem.p_mem.offset_mid;
+    input_mem.p_mem.offset_large = mem.p_mem.offset_large;
     relabel_contiguously(best_part, best_state, mem);
     //divide cut by 2 because each cut edge is counted from both sides
     typename ExperimentLoggerUtil<scalar_t>::CoarseLevel cl(best_state.cut / 2, 0, g.nnz(), g.numRows(), y.seconds(), iter_t.seconds(), iter_count, iter_count);

@@ -245,34 +245,14 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     //use linear probing to resolve conflicts
     //combine weights using atomic addition
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    ordinal_t low = 0, high = 0;
-    ordinal_t limit = 32;
-    vtx_view_t vtx_scratch = mem.s_mem.vtx1;
-    Kokkos::parallel_scan("compact high degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
-        if(degree >= limit){
-            if(final){
-                vtx_scratch(update) = i;
-            }
-            update++;
-        }
-    }, mem.s_mem.scan_host);
-    exec_space().fence();
-    high = mem.s_mem.scan_host();
-    Kokkos::parallel_scan("compact low degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
-        if(degree < limit){
-            if(final){
-                vtx_scratch(high + update) = i;
-            }
-            update++;
-        }
-    }, mem.s_mem.scan_host);
-    exec_space().fence();
-    low = mem.s_mem.scan_host();
-    combineAndDedupe cnd(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_scratch);
-    Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd);
-    Kokkos::parallel_for("deduplicate", policy_t(high, high + low), cnd);
+    ordinal_t low = mem.p_mem.offset_mid;
+    ordinal_t high = n - low;
+    vtx_view_t vtx_high = Kokkos::subview(mem.p_mem.order2, std::make_pair(low, n));
+    vtx_view_t vtx_low = Kokkos::subview(mem.p_mem.order2, std::make_pair(static_cast<ordinal_t>(0), low));
+    combineAndDedupe cnd_low(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_low);
+    combineAndDedupe cnd_high(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_high);
+    Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd_high);
+    Kokkos::parallel_for("deduplicate", policy_t(0, low), cnd_low);
     edge_offset_t old_size = hash_size;
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
         edge_offset_t val = coarse_row_map_f(i);
