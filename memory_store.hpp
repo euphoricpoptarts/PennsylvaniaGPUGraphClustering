@@ -55,6 +55,7 @@ struct memory_store {
         part_vt part, dest_part;
         vtx_view_t order1, order2;
         vtx_view_t lock_bit;
+        ordinal_t offset_mid, offset_large;
 
         persistent(const ordinal_t n){
             gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
