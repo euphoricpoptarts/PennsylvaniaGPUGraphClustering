@@ -49,12 +49,12 @@
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/zip_iterator.h>
-#include <thrust/tuple.h>
+#include <thrust/iterator/counting_iterator.h>
 
 struct is_nonnegative {
     __host__ __device__
-    bool operator()(const thrust::tuple<int, int>& x){
-        return thrust::get<0>(x) >= 0;
+    bool operator()(const int x){
+        return x >= 0;
     }
 };
 
@@ -109,16 +109,6 @@ public:
         matrix_t mtx;
         wgt_view_t wdeg;
     };
-
-    // define behavior-controlling enums
-    enum Heuristic { HECv1, HECv2, HECv3, Match, MtMetis };
-
-    // internal parameters and data
-    // default heuristic is MtMetis
-    Heuristic h = MtMetis;
-    ordinal_t coarse_vtx_cutoff = 1000;
-    ordinal_t min_allowed_vtx = 250;
-    unsigned int max_levels = 200;
 
 struct countingFunctor {
 
@@ -297,33 +287,19 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();
     thrust::device_ptr<int> htb(htable.data());
-    thrust::device_ptr<int> hte = htb + old_size;
-    thrust::device_ptr<int> hvb(hvals.data());
-    thrust::device_ptr<int> hve = hvb + old_size;
+    thrust::counting_iterator<int> iter(0);
     thrust::device_ptr<int> ec(entries_coarse.data());
-    thrust::device_ptr<int> wc(wgts_coarse.data());
-    thrust::copy_if(thrust::device, thrust::make_zip_iterator(htb, hvb), thrust::make_zip_iterator(hte, hve), thrust::make_zip_iterator(ec, wc), is_nonnegative());
+    thrust::copy_if(thrust::device, iter, iter + old_size, htb, ec, is_nonnegative());
+    Kokkos::parallel_for("read", policy_t(0, hash_size), KOKKOS_LAMBDA(const edge_offset_t j){
+        edge_offset_t jx = entries_coarse(j);
+        entries_coarse(j) = htable(jx);
+        wgts_coarse(j) = hvals(jx);
+    });
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     coarse_level_triple next_level;
     next_level.mtx = gc;
     return next_level;
-}
-
-void set_heuristic(Heuristic _h) {
-    this->h = _h;
-}
-
-void set_coarse_vtx_cutoff(ordinal_t _coarse_vtx_cutoff) {
-    this->coarse_vtx_cutoff = _coarse_vtx_cutoff;
-}
-
-void set_min_allowed_vtx(ordinal_t _min_allowed_vtx) {
-    this->min_allowed_vtx = _min_allowed_vtx;
-}
-
-void set_max_levels(unsigned int _max_levels) {
-    this->max_levels = _max_levels;
 }
 
 };
