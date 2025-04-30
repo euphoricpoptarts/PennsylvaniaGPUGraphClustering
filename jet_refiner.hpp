@@ -229,6 +229,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     });
     Kokkos::parallel_for("select destination part (large tables)", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = large_tables(t.league_rank());
+        ordinal_t team_size = t.team_size();
         float wd = wdeg(i);
         float multi = wd*inv_2m;
         edge_offset_t start = c_graph.graph.row_map(i);
@@ -237,31 +238,43 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
         // b_conn must be at least this value to pass filter
         float limit = p_conn - filter_ratio*(p_conn);
-        argmax_t am{-100000.0, end};
+        float maxl = limit - 1.0;
+        part_t argmax = NO_MOVE;
         //finds potential destination as most connected part excluding p
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, start, end), [=](const edge_offset_t j, argmax_t& local){
+        for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
             gain_t j_val = c_graph.values(j);
-            if(j_val > 0 && j_val >= limit && j_val > local.val){
+            if(j_val > 0 && j_val >= limit && j_val > maxl){
                 part_t px = c_graph.graph.entries(j);
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
-                if(j_conn > local.val && j_conn >= limit){
-                    local.val = j_conn;
-                    local.loc = j;
+                if(j_conn > maxl && j_conn >= limit){
+                    // this is not deterministic unless the case j_conn == maxl is handled
+                    maxl = j_conn;
+                    argmax = px;
                 }
             }
-        }, argmax_reducer_t(am));
-        Kokkos::single(Kokkos::PerTeam(t), [=](){
-            float gain = 0;
-            part_t best = NO_MOVE;
-            if(am.loc >= start && am.loc < end){
-                float b_conn = am.val;
-                best = c_graph.graph.entries(am.loc);
-                gain = b_conn - p_conn;
-            }
+        }
+        float maxg = 0;
+        float oldmaxl = maxl;
+        t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
+        if(maxg < limit){
+            if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+            return;
+        }
+        if(oldmaxl != maxg) argmax = n + 1;
+        part_t argmaxg = NO_MOVE;
+        t.team_reduce(Kokkos::Min<part_t, mem_space>(argmaxg), argmax);
+        if(argmaxg >= n) {
+            if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+            return;
+        }
+        if(t.team_rank() == 0){
+            part_t best = argmaxg;
+            float b_conn = maxg;
+            float gain = b_conn - p_conn;
             save_gains(i) = gain;
             //a vertex is not considered further if best == p
             dest_part(i) = best;
-        });
+        }
     });
     //need to store the pre-afterburn gains into a separate view
     //than savegains, because we write new values into it that may not be overwritten
@@ -333,11 +346,11 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 update -= (vpart == best) ? q : 0;
             }
         }, change);
-        Kokkos::single(Kokkos::PerTeam(t), [&](){
+        if(t.team_rank() == 0){
             if(igain + change >= 0){
                 lock_bit(i) = 1;
             }
-        });
+        }
     });
     Kokkos::parallel_for("afterburner heuristic", policy_t(0, small), KOKKOS_LAMBDA(const ordinal_t& x){
         float change = 0;
