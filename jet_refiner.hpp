@@ -181,20 +181,14 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     vtx_view_t vtx1 = mem.s_mem.vtx1;
     vtx_view_t vtx2 = mem.s_mem.vtx2;
     vtx_view_t order1 = mem.p_mem.order1;
-    Kokkos::parallel_scan("filter out locked and find large tables", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        part_t cache = dest_part(i);
-        if(cache == NULL_PART && lock_bit(i) == 0 && conn_table_sizes(i) > cutoff){
-            if(final){
-                vtx2(update) = i;
-            }
-            update++;
-        }
-    }, mem.s_mem.scan_host);
-    exec_space().fence();
-    num_pos = mem.s_mem.scan_host();
-    vtx_view_t large_tables = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
-    Kokkos::parallel_for("select destination part (small tables)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-        if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0) || conn_table_sizes(i) > cutoff){
+    ordinal_t big_begin = mem.p_mem.offset_large;
+    vtx_view_t small_tables = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
+    vtx_view_t large_tables = Kokkos::subview(order1, std::make_pair(big_begin, n));
+    // if input label count is smaller than cutoff, then all tables are also smaller than cutoff
+    bool truncated = (rfd.label_count <= cutoff);
+    Kokkos::parallel_for("select destination part (small tables)", policy_t(0, truncated ? n : big_begin), KOKKOS_LAMBDA(const ordinal_t x){
+        ordinal_t i = truncated ? x : small_tables(x);
+        if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0)){
             return;
         }
         part_t best = NO_MOVE;
@@ -227,60 +221,64 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         //a vertex is not considered further if best == p
         dest_part(i) = best;
     });
-    Kokkos::parallel_for("select destination part (large tables)", team_policy_t(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = large_tables(t.league_rank());
-        ordinal_t team_size = t.team_size();
-        float wd = wdeg(i);
-        float multi = wd*inv_2m;
-        edge_offset_t start = c_graph.graph.row_map(i);
-        edge_offset_t end = c_graph.graph.row_map(i+1);
-        part_t p = part(i);
-        float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
-        // b_conn must be at least this value to pass filter
-        float limit = p_conn - filter_ratio*(p_conn);
-        float maxl = limit - 1.0;
-        part_t argmax = NO_MOVE;
-        //finds potential destination as most connected part excluding p
-        for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
-            gain_t j_val = c_graph.values(j);
-            if(j_val > 0 && j_val >= limit && j_val > maxl){
-                part_t px = c_graph.graph.entries(j);
-                float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
-                if(j_conn > maxl && j_conn >= limit){
-                    // this is not deterministic unless the case j_conn == maxl is handled
-                    maxl = j_conn;
-                    argmax = px;
+    if(!truncated){
+        Kokkos::parallel_for("select destination part (large tables)", team_policy_t(n - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+            ordinal_t i = large_tables(t.league_rank());
+            if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0)){
+                return;
+            }
+            ordinal_t team_size = t.team_size();
+            float wd = wdeg(i);
+            float multi = wd*inv_2m;
+            edge_offset_t start = c_graph.graph.row_map(i);
+            edge_offset_t end = c_graph.graph.row_map(i+1);
+            part_t p = part(i);
+            float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
+            // b_conn must be at least this value to pass filter
+            float limit = p_conn - filter_ratio*(p_conn);
+            float maxl = limit - 1.0;
+            part_t argmax = NO_MOVE;
+            //finds potential destination as most connected part excluding p
+            for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
+                gain_t j_val = c_graph.values(j);
+                if(j_val > 0 && j_val >= limit && j_val > maxl){
+                    part_t px = c_graph.graph.entries(j);
+                    float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
+                    if(j_conn > maxl && j_conn >= limit){
+                        // this is not deterministic unless the case j_conn == maxl is handled
+                        maxl = j_conn;
+                        argmax = px;
+                    }
                 }
             }
-        }
-        float maxg = 0;
-        float oldmaxl = maxl;
-        t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
-        if(maxg < limit){
-            if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
-            return;
-        }
-        if(oldmaxl != maxg) argmax = n + 1;
-        part_t argmaxg = NO_MOVE;
-        t.team_reduce(Kokkos::Min<part_t, mem_space>(argmaxg), argmax);
-        if(argmaxg >= n) {
-            if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
-            return;
-        }
-        if(t.team_rank() == 0){
-            part_t best = argmaxg;
-            float b_conn = maxg;
-            float gain = b_conn - p_conn;
-            save_gains(i) = gain;
-            //a vertex is not considered further if best == p
-            dest_part(i) = best;
-        }
-    });
+            float maxg = 0;
+            float oldmaxl = maxl;
+            t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
+            if(maxg < limit){
+                if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+                return;
+            }
+            if(oldmaxl != maxg) argmax = n + 1;
+            part_t argmaxg = NO_MOVE;
+            t.team_reduce(Kokkos::Min<part_t, mem_space>(argmaxg), argmax);
+            if(argmaxg >= n) {
+                if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+                return;
+            }
+            if(t.team_rank() == 0){
+                part_t best = argmaxg;
+                float b_conn = maxg;
+                float gain = b_conn - p_conn;
+                save_gains(i) = gain;
+                //a vertex is not considered further if best == p
+                dest_part(i) = best;
+            }
+        });
+    }
     //need to store the pre-afterburn gains into a separate view
     //than savegains, because we write new values into it that may not be overwritten
     //if a vertex has its best neighbor cached
     obj_vt pregain = mem.s_mem.obj1;
-    ordinal_t big_begin = mem.p_mem.offset_large;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
