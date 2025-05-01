@@ -94,11 +94,12 @@ public:
     using mem_t = memory_store<matrix_t, part_t>;
     using cdata_t = typename mem_t::conn_data;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
-    static constexpr gain_t GAIN_MIN = std::numeric_limits<gain_t>::lowest();
+    static constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr part_t NULL_PART = -1;
     static constexpr part_t HASH_RECLAIM = -2;
     static constexpr part_t NO_MOVE = -3;
+    static constexpr ordinal_t MID_CUTOFF = 32;
 
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -406,7 +407,6 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     vtx_view_t swap_bit = mem.s_mem.zeros1;
     cdata_t& cdata = mem.cd_mem;
     ordinal_t total = 0;
-    ordinal_t cutoff = 32;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
     vtx_view_t order2 = mem.p_mem.order2;
     vtx_view_t dest_cache = mem.p_mem.dest_part;
@@ -419,7 +419,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     Kokkos::parallel_for("check adjacent", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         if(swap_bit(i) == 1) return;
         //mark adjacent vertices
-        edge_offset_t limit = g.graph.row_map(i) + cutoff;
+        edge_offset_t limit = g.graph.row_map(i) + MID_CUTOFF;
         if(g.graph.row_map(i+1) < limit) limit = g.graph.row_map(i+1);
         for(edge_offset_t j = g.graph.row_map(i); j < limit; j++){
             ordinal_t v = g.graph.entries(j);
@@ -429,10 +429,12 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
         }
     });
-    Kokkos::parallel_scan("collect vtx to be checked", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+    ordinal_t big_begin = mem.p_mem.offset_mid;
+    Kokkos::parallel_scan("collect vtx to be checked", policy_t(big_begin, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
+        ordinal_t i = order2(x);
         if(swap_bit(i) == 0){
             ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
-            if(degree >= cutoff){
+            if(degree >= MID_CUTOFF){
                 if(final){
                     vtx1(update) = i;
                 }
@@ -440,8 +442,13 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
         }
     }, mem.s_mem.scan_host);
-    exec_space().fence();
-    total = mem.s_mem.scan_host();
+    // above scan won't run if big_begin == g.numRows(), so scan_host won't be set
+    if(big_begin == g.numRows()){
+        total = 0;
+    } else {
+        exec_space().fence();
+        total = mem.s_mem.scan_host();
+    }
     Kokkos::parallel_for("check adjacent (large rows)", team_policy_t(total, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         //mark adjacent vertices
         ordinal_t marked = 0;
@@ -458,7 +465,6 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             swap_bit(i) = 2;
         }
     });
-    ordinal_t big_begin = mem.p_mem.offset_mid;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     // order2 is already organized into two buckets by degree > or <= 32
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
@@ -925,7 +931,7 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
     vtx_view_t order2 = mem.p_mem.order2;
     Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree < 32){
+        if(degree < MID_CUTOFF){
             if(final){
                 order2(update) = i;
             }
