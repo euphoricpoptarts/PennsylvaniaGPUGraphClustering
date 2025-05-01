@@ -165,13 +165,13 @@ void relabel_contiguously(part_vt labels, refine_data& rfd, mem_t& mem){
 //determines which vertices (if any) should be moved to another part to improve objective
 //8 kernels, 2 device-host syncs
 template <bool uniform>
-vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, bool skip_lock){
+vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
     part_vt dest_part = mem.p_mem.dest_part;
     obj_vt save_gains = mem.p_mem.gain_persistent;
-    vtx_view_t lock_bit = mem.p_mem.lock_bit;
+    vtx_view_t swap_bit = mem.s_mem.zeros1;
     gain_vt total_deg = rfd.total_deg;
     gain_vt wdeg = prob.wdeg;
     cdata_t& cdata = mem.cd_mem;
@@ -189,7 +189,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     bool truncated = (rfd.label_count <= cutoff);
     Kokkos::parallel_for("select destination part (small tables)", policy_t(0, truncated ? n : big_begin), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = truncated ? x : small_tables(x);
-        if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0)){
+        if(dest_part(i) != NULL_PART){
             return;
         }
         part_t best = NO_MOVE;
@@ -213,7 +213,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
                 }
             }
         }
-        float gain = 0;
+        float gain = OBJ_MIN;
         if(best != NO_MOVE){
             // vertices must pass this filter in order to be considered further
             gain = b_conn - p_conn;
@@ -225,7 +225,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     if(!truncated){
         Kokkos::parallel_for("select destination part (large tables)", team_policy_t(n - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
             ordinal_t i = large_tables(t.league_rank());
-            if(!(dest_part(i) == NULL_PART && lock_bit(i) == 0)){
+            if(dest_part(i) != NULL_PART){
                 return;
             }
             ordinal_t team_size = t.team_size();
@@ -256,14 +256,20 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             float oldmaxl = maxl;
             t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
             if(maxg < limit){
-                if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+                if(t.team_rank() == 0){
+                    dest_part(i) = NO_MOVE;
+                    save_gains(i) = OBJ_MIN;
+                }
                 return;
             }
             if(oldmaxl != maxg) argmax = n + 1;
             part_t argmaxg = NO_MOVE;
             t.team_reduce(Kokkos::Min<part_t, mem_space>(argmaxg), argmax);
             if(argmaxg >= n) {
-                if(t.team_rank() == 0) dest_part(i) = NO_MOVE;
+                if(t.team_rank() == 0){
+                    dest_part(i) = NO_MOVE;
+                    save_gains(i) = OBJ_MIN;
+                }
                 return;
             }
             if(t.team_rank() == 0){
@@ -279,7 +285,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     //need to store the pre-afterburn gains into a separate view
     //than savegains, because we write new values into it that may not be overwritten
     //if a vertex has its best neighbor cached
-    obj_vt pregain = mem.s_mem.obj1;
+    obj_vt pregain = save_gains;
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
@@ -290,15 +296,11 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }
         ordinal_t i = order1(x);
         part_t best = dest_part(i);
-        if(best != NO_MOVE && lock_bit(i) == 0){
+        if(best != NO_MOVE){
             if(final){
                 vtx1(update) = i;
-                pregain(i) = save_gains(i);
             }
             update++;
-        } else if(final){
-            pregain(i) = -100000.0;
-            lock_bit(i) = 0;
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
@@ -347,7 +349,7 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
         }, change);
         if(t.team_rank() == 0){
             if(igain + change >= 0){
-                lock_bit(i) = 1;
+                swap_bit(i) = 1;
             }
         }
     });
@@ -378,17 +380,17 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             }
         }
         if(igain + change >= 0){
-            lock_bit(i) = 1;
+            swap_bit(i) = 1;
         }
     });
     vtx_view_t swaps2 = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        if(lock_bit(pos_moves(i))){
+        if(swap_bit(pos_moves(i))){
             if(final){
                 swaps2(update) = pos_moves(i);
-                // don't maintain locks in coarsening phase
-                if(skip_lock) lock_bit(pos_moves(i)) = 0;
+                // reset to zero for later use
+                swap_bit(pos_moves(i)) = 0;
             }
             update++;
         }
@@ -958,7 +960,6 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
     cdata.c_graph = matrix_t("conn graph", g.numRows(), g.numRows(), gain_size, cdata.conn_vals, cdata.conn_offsets, cdata.conn_entries);
     Kokkos::deep_copy(exec_space(), mem.p_mem.pvals, 0);
     Kokkos::deep_copy(exec_space(), mem.p_mem.dest_part, NULL_PART);
-    Kokkos::deep_copy(exec_space(), mem.p_mem.lock_bit, 0);
 }
 
 template <bool uniform>
@@ -996,7 +997,6 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     Kokkos::Timer iter_t;
     float filter_ratio = 0.75;
     int limit = 6;
-    bool skip = true;
     int count = 0;
     while(count++ < limit){
         iter_count++;
@@ -1006,7 +1006,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio, skip);
+        moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
         if(moves.extent(0) == 0) break;
         perform_moves<uniform>(prob, part, moves, mem, curr_state);
         curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
