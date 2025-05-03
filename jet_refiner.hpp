@@ -89,8 +89,6 @@ public:
     using member = typename team_policy_t::member_type;
     using stat = part_stat<matrix_t, part_t>;
     using refine_data = typename stat::refine_data;
-    using argmax_reducer_t = Kokkos::MaxFirstLoc<float, edge_offset_t, Device>;
-    using argmax_t = typename argmax_reducer_t::value_type;
     using mem_t = memory_store<matrix_t, part_t>;
     using cdata_t = typename mem_t::conn_data;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
@@ -100,6 +98,7 @@ public:
     static constexpr part_t HASH_RECLAIM = -2;
     static constexpr part_t NO_MOVE = -3;
     static constexpr ordinal_t MID_CUTOFF = 32;
+    static constexpr ordinal_t LARGE_CUTOFF = 128;
 
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -178,15 +177,14 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
     part_vt conn_table_sizes = cdata.conn_table_sizes;
     gain_vt pvals = mem.p_mem.pvals;
     float inv_2m = 1.0 / static_cast<float>(rfd.g_deg);
-    ordinal_t cutoff = 128;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
     vtx_view_t vtx2 = mem.s_mem.vtx2;
     vtx_view_t order1 = mem.p_mem.order1;
     ordinal_t big_begin = mem.p_mem.offset_large;
     vtx_view_t small_tables = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
     vtx_view_t large_tables = Kokkos::subview(order1, std::make_pair(big_begin, n));
-    // if input label count is smaller than cutoff, then all tables are also smaller than cutoff
-    bool truncated = (rfd.label_count <= cutoff);
+    // if input label count is smaller than LARGE_CUTOFF, then all tables are also smaller than LARGE_CUTOFF
+    bool truncated = (rfd.label_count <= LARGE_CUTOFF);
     Kokkos::parallel_for("select destination part (small tables)", policy_t(0, truncated ? n : big_begin), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = truncated ? x : small_tables(x);
         if(dest_part(i) != NULL_PART){
@@ -410,6 +408,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     cdata_t& cdata = mem.cd_mem;
     ordinal_t total = 0;
     vtx_view_t vtx1 = mem.s_mem.vtx1;
+    vtx_view_t order1 = mem.p_mem.order1;
     vtx_view_t order2 = mem.p_mem.order2;
     vtx_view_t dest_cache = mem.p_mem.dest_part;
     Kokkos::parallel_for("mark", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
@@ -421,7 +420,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
     Kokkos::parallel_for("check adjacent", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         if(swap_bit(i) == 1) return;
         //mark adjacent vertices
-        edge_offset_t limit = g.graph.row_map(i) + MID_CUTOFF;
+        edge_offset_t limit = g.graph.row_map(i) + LARGE_CUTOFF;
         if(g.graph.row_map(i+1) < limit) limit = g.graph.row_map(i+1);
         for(edge_offset_t j = g.graph.row_map(i); j < limit; j++){
             ordinal_t v = g.graph.entries(j);
@@ -431,21 +430,18 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
         }
     });
-    ordinal_t big_begin = mem.p_mem.offset_mid;
-    Kokkos::parallel_scan("collect vtx to be checked", policy_t(big_begin, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
-        ordinal_t i = order2(x);
+    ordinal_t bigger_begin = mem.p_mem.offset_large;
+    Kokkos::parallel_scan("collect vtx to be checked", policy_t(bigger_begin, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
+        ordinal_t i = order1(x);
         if(swap_bit(i) == 0){
-            ordinal_t degree = g.graph.row_map(i+1) - g.graph.row_map(i);
-            if(degree >= MID_CUTOFF){
-                if(final){
-                    vtx1(update) = i;
-                }
-                update++;
+            if(final){
+                vtx1(update) = i;
             }
+            update++;
         }
     }, mem.s_mem.scan_host);
-    // above scan won't run if big_begin == g.numRows(), so scan_host won't be set
-    if(big_begin == g.numRows()){
+    // above scan won't run if bigger_begin == g.numRows(), so scan_host won't be set
+    if(bigger_begin == g.numRows()){
         total = 0;
     } else {
         exec_space().fence();
@@ -455,7 +451,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
         //mark adjacent vertices
         ordinal_t marked = 0;
         ordinal_t i = vtx1(t.league_rank());
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [=](const edge_offset_t j, ordinal_t& update){
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i) + LARGE_CUTOFF, g.graph.row_map(i+1)), [=](const edge_offset_t j, ordinal_t& update){
             if(update == 0){
                 ordinal_t v = g.graph.entries(j);
                 if(swap_bit(v) == 1){
@@ -468,6 +464,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
         }
     });
     vtx_pin_st pin_host = mem.s_mem.pin_host;
+    ordinal_t big_begin = mem.p_mem.offset_mid;
     // order2 is already organized into two buckets by degree > or <= 32
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
@@ -919,9 +916,9 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
     // organize vertices into two different sets of two buckets each
     // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
     vtx_view_t order1 = mem.p_mem.order1;
-    Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+    Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree <= 128){
+        if(degree < LARGE_CUTOFF){
             if(final){
                 order1(update) = i;
             }
@@ -931,7 +928,7 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
         }
     }, mem.p_mem.offset_large);
     vtx_view_t order2 = mem.p_mem.order2;
-    Kokkos::parallel_scan("count sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+    Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(degree < MID_CUTOFF){
             if(final){
