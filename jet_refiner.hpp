@@ -451,6 +451,7 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
         //mark adjacent vertices
         ordinal_t marked = 0;
         ordinal_t i = vtx1(t.league_rank());
+        // we have already checked [g.graph.row_map(i), g.graph.row_map(i) + LARGE_CUTOFF)
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i) + LARGE_CUTOFF, g.graph.row_map(i+1)), [=](const edge_offset_t j, ordinal_t& update){
             if(update == 0){
                 ordinal_t v = g.graph.entries(j);
@@ -819,20 +820,34 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
     gain_vt pvals = mem.p_mem.pvals;
     vtx_view_t big = Kokkos::subview(order2, std::make_pair(mem.p_mem.offset_mid, n));
     vtx_view_t small = Kokkos::subview(order2, std::make_pair(static_cast<ordinal_t>(0), mem.p_mem.offset_mid));
-    Kokkos::parallel_for("init conn DS", team_policy_t(n - mem.p_mem.offset_mid, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+    int max_size = 512;
+    Kokkos::parallel_for("init conn DS", team_policy_t(n - mem.p_mem.offset_mid, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(max_size*sizeof(gain_t) + max_size*sizeof(part_t))), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big(t.league_rank());
         edge_offset_t g_start = cdata.conn_offsets(i);
         edge_offset_t g_end = cdata.conn_offsets(i + 1);
         part_t size = g_end - g_start;
-        part_t* s_conn_entries = cdata.conn_entries.data() + g_start;
-        gain_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+        part_t* s_conn_entries;
+        gain_t* s_conn_vals;
+        if(size < max_size){
+            s_conn_entries = (part_t*) t.team_shmem().get_shmem(sizeof(part_t) * size);
+            s_conn_vals = (gain_t*) t.team_shmem().get_shmem(sizeof(gain_t) * size);
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, size), [&] (const edge_offset_t& j) {
+                s_conn_entries[j] = NULL_PART;
+                s_conn_vals[j] = 0;
+            });
+            t.team_barrier();
+        } else {
+            s_conn_entries = cdata.conn_entries.data() + g_start;
+            s_conn_vals = cdata.conn_vals.data() + g_start;
+        }
+        part_t p_i = part(i);
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&] (const edge_offset_t& j, gain_t& update){
             ordinal_t v = g.graph.entries(j);
             gain_t wgt;
             if constexpr(uniform) wgt = 1;
             else wgt = g.values(j);
             part_t p = part(v);
-            if(p == part(i)){
+            if(p == p_i){
                 update += wgt;
                 return;
             }
@@ -847,8 +862,8 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
                 if(px == p){
                     success = true;
                 } else {
-                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(s_conn_entries[p_o] == p){
+                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(px == p || px == NULL_PART){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % size;
@@ -857,6 +872,12 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
             }
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, pvals(i));
+        if(size < max_size){
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
+                cdata.conn_entries(j) = s_conn_entries[j - g_start];
+                cdata.conn_vals(j) = s_conn_vals[j - g_start];
+            });
+        }
     });
     Kokkos::parallel_for("init conn DS", policy_t(0, mem.p_mem.offset_mid), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = small(x);
@@ -876,20 +897,19 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
                 update += wgt;
                 continue;
             }
+            while(j + 1 < g.graph.row_map(i+1) && p == part(g.graph.entries(j+1))){
+                j++;
+                if constexpr(uniform) wgt += 1;
+                else wgt += g.values(j);
+            }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
-            bool success = false;
-            while(!success){
-                part_t px = s_conn_entries[p_o];
-                while(px != p && px != NULL_PART){
-                    p_o = (p_o + 1) % size;
-                    px = s_conn_entries[p_o];
-                }
-                if(px == p){
-                    success = true;
-                } else {
-                    s_conn_entries[p_o] = p;
-                    success = true;
-                }
+            part_t px = s_conn_entries[p_o];
+            while(px != p && px != NULL_PART){
+                p_o = (p_o + 1) % size;
+                px = s_conn_entries[p_o];
+            }
+            if(px != p){
+                s_conn_entries[p_o] = p;
             }
             s_conn_vals[p_o] += wgt;
         }
