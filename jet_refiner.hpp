@@ -807,6 +807,23 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
     curr_state.cut -= cut_change;
 }
 
+void fast_fill(vtx_view_t a, ordinal_t V){
+    edge_offset_t width = a.extent(0);
+    edge_offset_t w8 = (width + 7)/8;
+    Kokkos::parallel_for("fast fill", policy_t(0, w8), KOKKOS_LAMBDA(const edge_offset_t i){
+        a(i) = V;
+        a(i + w8) = V;
+        a(i + 2*w8) = V;
+        a(i + 3*w8) = V;
+        a(i + 4*w8) = V;
+        a(i + 5*w8) = V;
+        a(i + 6*w8) = V;
+        // this one may be out of bounds for even arbitrarily large width
+        // technically some of the other ones can also be out of bounds for width < 42
+        if(i + 7*w8 < width) a(i + 7*w8) = V;
+    });
+}
+
 //initialize conn hash tables for each vertex
 template <bool uniform>
 void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
@@ -814,7 +831,8 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
     cdata_t& cdata = mem.cd_mem;
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
-    Kokkos::deep_copy(exec_space(), cdata.conn_entries, NULL_PART);
+    fast_fill(cdata.conn_entries, NULL_PART);
+    // Kokkos::deep_copy(exec_space(), cdata.conn_entries, NULL_PART);
     ordinal_t n = g.numRows();
     vtx_view_t order2 = mem.p_mem.order2;
     gain_vt pvals = mem.p_mem.pvals;
