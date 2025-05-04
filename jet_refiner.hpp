@@ -537,8 +537,8 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
                 if(px == p){
                     success = true;
                 } else {
-                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(px == p || px == NULL_PART){
+                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(s_conn_entries[p_o] == p){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % size;
@@ -880,8 +880,8 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
                 if(px == p){
                     success = true;
                 } else {
-                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(px == p || px == NULL_PART){
+                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(s_conn_entries[p_o] == p){
                         success = true;
                     } else {
                         p_o = (p_o + 1) % size;
