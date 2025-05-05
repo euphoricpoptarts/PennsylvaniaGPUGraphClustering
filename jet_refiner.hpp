@@ -233,27 +233,27 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             edge_offset_t end = c_graph.graph.row_map(i+1);
             part_t p = part(i);
             float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
-            // b_conn must be at least this value to pass filter
-            float limit = p_conn - filter_ratio*(p_conn);
-            float maxl = limit - 1.0;
+            // j_conn must be at least this value to pass filter
+            float maxl = p_conn - filter_ratio*(p_conn);
             part_t argmax = NO_MOVE;
             //finds potential destination as most connected part excluding p
             for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
                 gain_t j_val = c_graph.values(j);
-                if(j_val > 0 && j_val >= limit && j_val > maxl){
+                if(j_val > 0 && j_val >= maxl){
                     part_t px = c_graph.graph.entries(j);
                     float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
-                    if(j_conn > maxl && j_conn >= limit){
-                        // this is not deterministic unless the case j_conn == maxl is handled
-                        maxl = j_conn;
+                    if(j_conn >= maxl){
+                        // this is not deterministic unless the case j_conn == maxl is handled properly
                         argmax = px;
+                        maxl = j_conn;
                     }
                 }
             }
+            if(argmax == NO_MOVE) maxl = OBJ_MIN;
             float maxg = 0;
             float oldmaxl = maxl;
             t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
-            if(maxg < limit){
+            if(maxg == OBJ_MIN){
                 if(t.team_rank() == 0){
                     dest_part(i) = NO_MOVE;
                     save_gains(i) = OBJ_MIN;
@@ -263,20 +263,9 @@ vtx_view_t jet_lp(const problem& prob, const matrix_t& c_graph, const part_vt& p
             if(oldmaxl != maxg) argmax = n + 1;
             part_t argmaxg = NO_MOVE;
             t.team_reduce(Kokkos::Min<part_t, mem_space>(argmaxg), argmax);
-            if(argmaxg >= n) {
-                if(t.team_rank() == 0){
-                    dest_part(i) = NO_MOVE;
-                    save_gains(i) = OBJ_MIN;
-                }
-                return;
-            }
             if(t.team_rank() == 0){
-                part_t best = argmaxg;
-                float b_conn = maxg;
-                float gain = b_conn - p_conn;
-                save_gains(i) = gain;
-                //a vertex is not considered further if best == p
-                dest_part(i) = best;
+                save_gains(i) = maxg - p_conn;
+                dest_part(i) = argmaxg;
             }
         });
     }
