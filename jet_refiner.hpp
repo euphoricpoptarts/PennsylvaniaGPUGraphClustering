@@ -517,20 +517,19 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             bool success = false;
+            part_t px = s_conn_entries[p_o];
             while(!success){
-                part_t px = s_conn_entries[p_o];
                 while(px != p && px != NULL_PART){
-                    p_o = (p_o + 1) % size;
+                    p_o++;
+                    p_o = (p_o == size) ? 0 : p_o;
                     px = s_conn_entries[p_o];
                 }
                 if(px == p){
                     success = true;
                 } else {
-                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(s_conn_entries[p_o] == p){
+                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(px == p || px == NULL_PART){
                         success = true;
-                    } else {
-                        p_o = (p_o + 1) % size;
                     }
                 }
             }
@@ -860,20 +859,19 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
             }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             bool success = false;
+            part_t px = s_conn_entries[p_o];
             while(!success){
-                part_t px = s_conn_entries[p_o];
                 while(px != p && px != NULL_PART){
-                    p_o = (p_o + 1) % size;
+                    p_o++;
+                    p_o = (p_o == size) ? 0 : p_o;
                     px = s_conn_entries[p_o];
                 }
                 if(px == p){
                     success = true;
                 } else {
-                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(s_conn_entries[p_o] == p){
+                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(px == p || px == NULL_PART){
                         success = true;
-                    } else {
-                        p_o = (p_o + 1) % size;
                     }
                 }
             }
