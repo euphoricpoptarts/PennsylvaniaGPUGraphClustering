@@ -517,8 +517,8 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             bool success = false;
-            part_t px = s_conn_entries[p_o];
             while(!success){
+                part_t px = s_conn_entries[p_o];
                 while(px != p && px != NULL_PART){
                     p_o++;
                     p_o = (p_o == size) ? 0 : p_o;
@@ -527,9 +527,12 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
                 if(px == p){
                     success = true;
                 } else {
-                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(px == p || px == NULL_PART){
+                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(s_conn_entries[p_o] == p){
                         success = true;
+                    } else {
+                        p_o++;
+                        p_o = (p_o == size) ? 0 : p_o;
                     }
                 }
             }
@@ -575,7 +578,8 @@ void update_large(const problem& prob, const part_vt part, const vtx_view_t swap
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             part_t px = s_conn_entries[p_o];
             while(px != p && px != NULL_PART){
-                p_o = (p_o + 1) % size;
+                p_o++;
+                p_o = (p_o == size) ? 0 : p_o;
                 px = s_conn_entries[p_o];
             }
             if(px != p){
@@ -613,7 +617,8 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
             part_t p_o = hash(p) % static_cast<uint32_t>(v_size);
             //v is always adjacent to p because it is adjacent to i which is in p
             while(cdata.conn_entries(v_start + p_o) != p){
-                p_o = (p_o + 1) % v_size;
+                p_o++;
+                p_o = (p_o == v_size) ? 0 : p_o;
             }
             //DO NOT USE ATOMIC_ADD_FETCH HERE IT IS WAY SLOWER
             gain_t x = Kokkos::atomic_fetch_add(&cdata.conn_vals(v_start + p_o), -wgt);
@@ -709,7 +714,8 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
             while(!success){
                 part_t px = cdata.conn_entries(v_start + p_o);
                 while(px != best && px > NULL_PART){
-                    p_o = (p_o + 1) % v_size;
+                    p_o++;
+                    p_o = (p_o == v_size) ? 0 : p_o;
                     px = cdata.conn_entries(v_start + p_o);
                 }
                 if(px == best){
@@ -722,7 +728,8 @@ void update_small(const problem& prob, const part_vt part, const vtx_view_t swap
                     if(cdata.conn_entries(v_start + p_o) == best){
                         success = true;
                     } else {
-                        p_o = (p_o + 1) % v_size;
+                        p_o++;
+                        p_o = (p_o == v_size) ? 0 : p_o;
                     }
                 }
             }
@@ -859,8 +866,8 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
             }
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             bool success = false;
-            part_t px = s_conn_entries[p_o];
             while(!success){
+                part_t px = s_conn_entries[p_o];
                 while(px != p && px != NULL_PART){
                     p_o++;
                     p_o = (p_o == size) ? 0 : p_o;
@@ -869,9 +876,12 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
                 if(px == p){
                     success = true;
                 } else {
-                    px = Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
-                    if(px == p || px == NULL_PART){
+                    Kokkos::atomic_compare_exchange(s_conn_entries + p_o, NULL_PART, p);
+                    if(s_conn_entries[p_o] == p){
                         success = true;
+                    } else {
+                        p_o++;
+                        p_o = (p_o == size) ? 0 : p_o;
                     }
                 }
             }
@@ -910,7 +920,8 @@ void init_conn_graph(const problem& prob, const part_vt& part, mem_t& mem){
             part_t p_o = hash(p) % static_cast<uint32_t>(size);
             part_t px = s_conn_entries[p_o];
             while(px != p && px != NULL_PART){
-                p_o = (p_o + 1) % size;
+                p_o++;
+                p_o = (p_o == size) ? 0 : p_o;
                 px = s_conn_entries[p_o];
             }
             if(px != p){
