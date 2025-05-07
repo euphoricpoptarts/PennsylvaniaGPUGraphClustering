@@ -1028,26 +1028,30 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
     int iter_count = 0;
     Kokkos::fence();
     Kokkos::Timer iter_t;
-    float filter_ratio = 0.75;
-    int limit = 6;
-    int count = 0;
-    while(count++ < limit){
-        iter_count++;
-        vtx_view_t moves;
-        matrix_t c_graph = mem.cd_mem.c_graph;
-        if(!mem.cd_mem.init){
-            // use the input graph in place of the conn graph
-            c_graph = g;
-        }
-        moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
-        if(moves.extent(0) == 0) break;
-        perform_moves<uniform>(prob, part, moves, mem, curr_state);
-        curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
-        // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
-        //copy current partition and relevant data to output partition if following conditions pass
-        if(curr_state.mod > best_state.mod){
-            copy_refine_data(best_state, curr_state);
-            Kokkos::deep_copy(exec_space(), best_part, part);
+    std::vector<float> filter_ratios = {0.75, 0.25};
+    std::vector<int> limits = {4, 2};
+    for(int x = 0; x < filter_ratios.size(); x++){
+        float filter_ratio = filter_ratios[x];
+        int limit = limits[x];
+        int count = 0;
+        while(count++ < limit){
+            iter_count++;
+            vtx_view_t moves;
+            matrix_t c_graph = mem.cd_mem.c_graph;
+            if(!mem.cd_mem.init){
+                // use the input graph in place of the conn graph
+                c_graph = g;
+            }
+            moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
+            if(moves.extent(0) == 0) break;
+            perform_moves<uniform>(prob, part, moves, mem, curr_state);
+            curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
+            // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
+            //copy current partition and relevant data to output partition if following conditions pass
+            if(curr_state.mod > best_state.mod){
+                copy_refine_data(best_state, curr_state);
+                Kokkos::deep_copy(exec_space(), best_part, part);
+            }
         }
     }
     Kokkos::fence();
