@@ -203,7 +203,16 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             break;
         }
     }
+
+    if(levels.size() > 1){
+        // last level has the same partition as previous level
+        // so refining this level on the uncoarsening pass
+        // would not integrate any coarse information
+        levels.pop_back();
+        parts.pop_back();
+    }
     
+    // levels.size()-2 so that (i+1) is in bounds
     for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
         part_vt coarse_part = parts[i + 1];
