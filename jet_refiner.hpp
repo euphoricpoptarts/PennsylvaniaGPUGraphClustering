@@ -788,7 +788,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
         Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
     });
     //change part assignments and update part sizes
-    if(!cdata.init || total_moves >= prob.g.numRows() * 0.1){
+    if(!cdata.init || total_moves >= prob.g.numRows() * 0.04){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
