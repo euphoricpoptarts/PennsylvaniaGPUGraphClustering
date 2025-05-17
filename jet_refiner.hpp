@@ -809,6 +809,7 @@ void perform_moves(const problem& prob, part_vt part, const vtx_view_t swaps, me
     int64_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
     curr_state.cut -= cut_change;
+    curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
 }
 
 void fast_fill(vtx_view_t a, ordinal_t V){
@@ -1054,8 +1055,6 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, part_vt best_part, refine_dat
             moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
             if(moves.extent(0) == 0) break;
             perform_moves<uniform>(prob, part, moves, mem, curr_state);
-            curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
-            // std::cout << "Cut: " << curr_state.cut << "; Modularity: " << std::setprecision(6) << curr_state.mod << "; Labels: " << stat::total_labels(curr_state.total_deg) << std::endl;
             //copy current partition and relevant data to output partition if following conditions pass
             if(curr_state.mod > best_state.mod){
                 copy_refine_data(best_state, curr_state);
