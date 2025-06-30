@@ -136,6 +136,7 @@ struct countingFunctor {
     }
 };
 
+template <bool uniform>
 struct combineAndDedupe {
     matrix_t g;
     vtx_view_t vcmap;
@@ -191,7 +192,8 @@ struct combineAndDedupe {
             ordinal_t u = vcmap(g.graph.entries(j));
             if(i == u) return;
             edge_offset_t offset = insert(hash_start, size, u, i);
-            Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
+            if constexpr(uniform) Kokkos::atomic_add(&hvals(hash_start + offset), 1);
+            else Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
         });
     }
 
@@ -208,7 +210,8 @@ struct combineAndDedupe {
             ordinal_t u = vcmap(g.graph.entries(j));
             if(i == u) continue;
             edge_offset_t offset = insert(hash_start, size, u, i);
-            Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
+            if constexpr(uniform) Kokkos::atomic_add(&hvals(hash_start + offset), 1);
+            else Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
         }
     }
 };
@@ -230,6 +233,7 @@ void fast_fill(vtx_view_t a, ordinal_t V){
     });
 }
 
+template <bool uniform>
 coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     const vtx_view_t vcmap,
     const ordinal_t nc,
@@ -267,8 +271,8 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     ordinal_t high = n - low;
     vtx_view_t vtx_high = Kokkos::subview(mem.p_mem.order2, std::make_pair(low, n));
     vtx_view_t vtx_low = Kokkos::subview(mem.p_mem.order2, std::make_pair(static_cast<ordinal_t>(0), low));
-    combineAndDedupe cnd_low(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_low);
-    combineAndDedupe cnd_high(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_high);
+    combineAndDedupe<uniform> cnd_low(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_low);
+    combineAndDedupe<uniform> cnd_high(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_high);
     Kokkos::parallel_for("deduplicate", team_policy_t(high, Kokkos::AUTO), cnd_high);
     Kokkos::parallel_for("deduplicate", policy_t(0, low), cnd_low);
     edge_offset_t old_size = hash_size;
