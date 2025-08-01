@@ -46,7 +46,7 @@
 #include <queue>
 
 using namespace jet_community;
-using ref_t = jet_refiner<matrix_t, part_t>;
+using ref_t = jet_refiner<matrix_t>;
 using rfd_t = typename ref_t::refine_data;
 using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
