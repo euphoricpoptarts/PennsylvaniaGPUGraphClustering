@@ -3,7 +3,9 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 
-template <class crsMat, typename part_t>
+// this struct contains almost all auxiliary memory used by the algorithm
+// this allows for efficient reuse of memory
+template <class crsMat>
 struct memory_store {
 
     //helper for getting gain_t
@@ -20,73 +22,55 @@ struct memory_store {
     using scalar_t = typename matrix_t::value_type;
     // need some trickery because make_signed is undefined for floating point types
     using gain_t = typename std::conditional_t<std::is_signed_v<scalar_t>, type_identity<scalar_t>, std::make_signed<scalar_t>>::type;
-    using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
-    using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
+    using vtx_vt = Kokkos::View<ordinal_t*, Device>;
+    using edge_vt = Kokkos::View<edge_offset_t*, Device>;
     using gain_vt = Kokkos::View<gain_t*, Device>;
+    using gain_svt = Kokkos::View<gain_t, Device>;
     using vtx_pin_st = Kokkos::View<ordinal_t, Kokkos::SharedHostPinnedSpace>;
     using gain_pin_vt = Kokkos::View<gain_t*, Kokkos::SharedHostPinnedSpace>;
     using gain_pin_st = Kokkos::View<gain_t, Kokkos::SharedHostPinnedSpace>;
-    using part_vt = Kokkos::View<part_t*, Device>;
     using obj_vt = Kokkos::View<float*, Device>;
 
-    // vertex-part connectivity datastructure
-    struct conn_data {
-        edge_view_t conn_offsets;
-        gain_vt conn_vals;
-        part_vt conn_entries;
-        // matrix wrapper of above views
-        matrix_t c_graph;
-        part_vt conn_table_sizes;
-        bool init = false;
-
-        conn_data(const matrix_t largest){
-            ordinal_t n = largest.numRows();
-            conn_vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("conn vals"), largest.nnz());
-            conn_entries = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn entries"), largest.nnz());
-            conn_offsets = edge_view_t(Kokkos::ViewAllocateWithoutInitializing("conn offsets"), n + 1);
-            conn_table_sizes = part_vt(Kokkos::ViewAllocateWithoutInitializing("conn table size"), n);
-        }
-    };
-
-    // this struct contains memory for persistent state across lp iterations
+    // this struct contains memory which either requires initialization or some degree of persistence
     struct persistent {
-        obj_vt gain_persistent;
+        edge_vt row_map;
+        gain_vt vals;
+        vtx_vt entries;
+        vtx_vt cluster_sizes;
+        obj_vt obj_persistent;
         gain_vt pvals;
-        part_vt part, dest_part;
-        vtx_view_t order1, order2;
+        vtx_vt part, dest_part;
+        vtx_vt order1, order2;
+        vtx_vt dest_cache;
         ordinal_t offset_mid, offset_large;
 
-        persistent(const ordinal_t n){
-            gain_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
+        persistent(const matrix_t largest){
+            ordinal_t n = largest.numRows();
+            vals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("vals"), largest.nnz()*1.2);
+            entries = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("entries"), largest.nnz()*1.2);
+            cluster_sizes = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("cluster table sizes"), n);
+            row_map = edge_vt(Kokkos::ViewAllocateWithoutInitializing("row map"), n + 1);
+            obj_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
             pvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals"), n);
-            part = part_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
-            dest_part = part_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
-            order1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 1"), n);
-            order2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 2"), n);
-        }
-
-        persistent(const persistent& source, const ordinal_t n){
-            gain_persistent = Kokkos::subview(source.gain_persistent, std::make_pair(static_cast<ordinal_t>(0), n));
-            pvals = Kokkos::subview(source.pvals, std::make_pair(static_cast<ordinal_t>(0), n));
-            part = Kokkos::subview(source.part, std::make_pair(static_cast<ordinal_t>(0), n));
-            dest_part = Kokkos::subview(source.dest_part, std::make_pair(static_cast<ordinal_t>(0), n));
-            order1 = source.order1;
-            order2 = source.order2;
+            dest_part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
+            part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
+            dest_cache = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
+            order1 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 1"), n);
+            order2 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 2"), n);
         }
     };
 
-    // this struct contains memory which does not require initialization between lp iterations
+    // this struct contains memory which can be used as-is
     struct scratch {
-        vtx_view_t vtx1, vtx2;
-        vtx_view_t zeros1;
+        vtx_vt vtx1, vtx2, zeros1;
         vtx_pin_st scan_host, pin_host;
         gain_pin_st cut_change1, cut_change2;
         gain_pin_vt reduce_locs;
 
         scratch(const ordinal_t n) {
-            vtx1 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
-            vtx2 = vtx_view_t(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
-            zeros1 = vtx_view_t("zeros 1", n);
+            vtx1 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 1"), n);
+            vtx2 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx scratch 2"), n);
+            zeros1 = vtx_vt("zeros 1", n);
             scan_host = vtx_pin_st("scan host");
             pin_host = vtx_pin_st("pin host");
             reduce_locs = gain_pin_vt("reduce to here", 2);
@@ -95,17 +79,10 @@ struct memory_store {
         }
     };
 
-    conn_data cd_mem;
     persistent p_mem;
     scratch s_mem;
 
     memory_store(const matrix_t largest) :
-        cd_mem(largest),
-        p_mem(largest.numRows()), 
+        p_mem(largest), 
         s_mem(largest.numRows()) {}
-
-    memory_store(memory_store& source, const matrix_t g) :
-        cd_mem(source.cd_mem),
-        p_mem(source.p_mem, g.numRows()),
-        s_mem(source.s_mem) {}
 };

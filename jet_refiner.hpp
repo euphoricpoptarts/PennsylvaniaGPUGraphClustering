@@ -43,9 +43,8 @@
 #include <iomanip>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
-#include "ExperimentLoggerUtil.hpp"
 #include "memory_store.hpp"
-#include "part_stat.hpp"
+#include "cluster_data.h"
 
 namespace jet_community {
 
@@ -85,10 +84,8 @@ public:
     using dyn_policy_t = Kokkos::RangePolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
-    using stat = part_stat<matrix_t, ordinal_t>;
-    using refine_data = typename stat::refine_data;
-    using mem_t = memory_store<matrix_t, ordinal_t>;
-    using cdata_t = typename mem_t::conn_data;
+    using refine_data = cluster_data<matrix_t>;
+    using mem_t = memory_store<matrix_t>;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
@@ -112,21 +109,16 @@ struct problem {
     bool use_team = true;
 };
 
-void copy_refine_data(refine_data& lhs, refine_data& rhs){
-    Kokkos::deep_copy(exec_space(), lhs.total_deg, rhs.total_deg);
-    lhs.g_deg = rhs.g_deg;
-    lhs.cut = rhs.cut;
-    lhs.init = rhs.init;
-    lhs.mod = rhs.mod;
-    lhs.label_count = rhs.label_count;
-}
-
-refine_data clone_refine_data(refine_data& rhs){
-    refine_data clone;
-    clone.total_deg = gain_vt(Kokkos::ViewAllocateWithoutInitializing("total degree of clusters"), rhs.total_deg.extent(0));
-    copy_refine_data(clone, rhs);
-    return clone;
-}
+// vertex-part connectivity datastructure
+struct cdata_t {
+    edge_view_t conn_offsets;
+    gain_vt conn_vals;
+    vtx_vt conn_entries;
+    // matrix wrapper of above views
+    matrix_t c_graph;
+    vtx_vt conn_table_sizes;
+    bool init = false;
+};
 
 void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
 	ordinal_t n = labels.extent(0);
@@ -148,11 +140,12 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
 	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		labels(i) = used(labels(i));
 	});
-    gain_vt total_deg("new total degree", t_labels);
+    wgt_view_t total_deg("new total degree", t_labels);
+    wgt_view_t old_total_deg = rfd.total_deg;
     Kokkos::parallel_for("relabel degrees", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i){
-		if(rfd.total_deg(i) > 0){
+		if(old_total_deg(i) > 0){
             ordinal_t relabeled = used(i);
-            total_deg(relabeled) = rfd.total_deg(i);
+            total_deg(relabeled) = old_total_deg(i);
         }
 	});
     rfd.total_deg = total_deg;
@@ -167,14 +160,12 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
     vtx_vt dest_part = mem.p_mem.dest_part;
-    obj_vt save_gains = mem.p_mem.gain_persistent;
+    obj_vt save_gains = mem.p_mem.obj_persistent;
     vtx_vt swap_bit = mem.s_mem.zeros1;
     gain_vt total_deg = rfd.total_deg;
     gain_vt wdeg = prob.wdeg;
-    cdata_t& cdata = mem.cd_mem;
-    vtx_vt conn_table_sizes = cdata.conn_table_sizes;
     gain_vt pvals = mem.p_mem.pvals;
-    float inv_2m = 1.0 / static_cast<float>(rfd.g_deg);
+    float penalty_mod = rfd.get_penalty_modifier();
     vtx_vt vtx1 = mem.s_mem.vtx1;
     vtx_vt vtx2 = mem.s_mem.vtx2;
     vtx_vt order1 = mem.p_mem.order1;
@@ -190,7 +181,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
         }
         ordinal_t best = NO_MOVE;
         float wd = wdeg(i);
-        float multi = wd*inv_2m;
+        float multi = wd*penalty_mod;
         ordinal_t p = part(i);
         float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
         // b_conn must be at least this value to pass filter
@@ -226,7 +217,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
             }
             ordinal_t team_size = t.team_size();
             float wd = wdeg(i);
-            float multi = wd*inv_2m;
+            float multi = wd*penalty_mod;
             edge_offset_t start = c_graph.graph.row_map(i);
             edge_offset_t end = c_graph.graph.row_map(i+1);
             ordinal_t p = part(i);
@@ -312,7 +303,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
         float wd = prob.wdeg(i);
-        float multi = wd*inv_2m;
+        float multi = wd*penalty_mod;
         float igain = pregain(i);
         ordinal_t hi = hash(i);
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
@@ -344,7 +335,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
         float wd = prob.wdeg(i);
-        float multi = wd*inv_2m;
+        float multi = wd*penalty_mod;
         float igain = pregain(i);
         ordinal_t hi = hash(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
@@ -473,9 +464,8 @@ vtx_vt find_affected(const problem& prob, const vtx_vt swaps, mem_t& mem){
 
 // updates datastructures assuming a "large" number of vertices are moved
 template <bool uniform>
-void update_large(const problem& prob, const vtx_vt part, const vtx_vt swaps, mem_t& mem){
+void update_large(const problem& prob, const vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = prob.g;
-    cdata_t& cdata = mem.cd_mem;
     vtx_vt vtx1 = find_affected(prob, swaps, mem);
     ordinal_t total = mem.s_mem.scan_host();
     ordinal_t big_begin = mem.p_mem.offset_mid;
@@ -601,11 +591,10 @@ void update_large(const problem& prob, const vtx_vt part, const vtx_vt swaps, me
 //update datastructures assuming a "small" number of vertices are moved
 //2 kernels, 0 device-host syncs
 template <bool uniform>
-void update_small(const problem& prob, const vtx_vt part, const vtx_vt swaps, const vtx_vt dest_part, mem_t& mem){
+void update_small(const problem& prob, const vtx_vt part, const vtx_vt swaps, const vtx_vt dest_part, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = prob.g;
     ordinal_t total_moves = swaps.extent(0);
     gain_vt pvals = mem.p_mem.pvals;
-    cdata_t& cdata = mem.cd_mem;
     Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = swaps(t.league_rank());
         ordinal_t p = part(i);
@@ -772,18 +761,18 @@ gain_t pval_sum(gain_vt pvals, ordinal_t n){
 //perform swaps, update gains, and compute change to cut and imbalance
 //4 kernels, 1 device-host syncs
 template <bool uniform>
-void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, mem_t& mem, refine_data& curr_state){
+void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem, refine_data& curr_state){
     const wgt_view_t& wdeg = prob.wdeg;
-    vtx_vt dest_part = mem.p_mem.dest_part;
+    vtx_vt dest_part = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), prob.g.numRows()));
     ordinal_t total_moves = swaps.extent(0);
-    cdata_t& cdata = mem.cd_mem;
     gain_vt pvals = mem.p_mem.pvals;
+    wgt_view_t total_deg = curr_state.total_deg;
     Kokkos::parallel_for("update total deg", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t& x){
         ordinal_t i = swaps(x);
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        Kokkos::atomic_add(&curr_state.total_deg(p), -wdeg(i));
-        Kokkos::atomic_add(&curr_state.total_deg(best), wdeg(i));
+        Kokkos::atomic_add(&total_deg(p), -wdeg(i));
+        Kokkos::atomic_add(&total_deg(best), wdeg(i));
     });
     //change part assignments and update part sizes
     if(!cdata.init || total_moves >= prob.g.numRows() * 0.04){
@@ -794,20 +783,20 @@ void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, mem_t& 
             part(i) = best;
         });
         if(!cdata.init){
-            init_conn_graph<uniform>(prob, part, mem);
+            init_conn_graph<uniform>(prob, part, cdata, mem);
             Kokkos::deep_copy(exec_space(), dest_part, NULL_PART);
         } else {
-            update_large<uniform>(prob, part, swaps, mem);
+            update_large<uniform>(prob, part, swaps, cdata, mem);
         }
     } else {
         // cluster ids updated inside this function
-        update_small<uniform>(prob, part, swaps, dest_part, mem);
+        update_small<uniform>(prob, part, swaps, dest_part, cdata, mem);
     }
     gain_t curr_pval = pval_sum(pvals, prob.g.numRows());
-    int64_t cut_change = curr_pval - curr_state.last_pval;
+    gain_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
     curr_state.cut -= cut_change;
-    curr_state.mod = stat::modularity(curr_state.g_deg, curr_state.cut, curr_state.total_deg);
+    curr_state.obj = curr_state.objective();
 }
 
 void fast_fill(vtx_vt a, ordinal_t V){
@@ -829,9 +818,8 @@ void fast_fill(vtx_vt a, ordinal_t V){
 
 //initialize conn hash tables for each vertex
 template <bool uniform>
-void init_conn_graph(const problem& prob, const vtx_vt& part, mem_t& mem){
+void init_conn_graph(const problem& prob, const vtx_vt& part, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = prob.g;
-    cdata_t& cdata = mem.cd_mem;
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
     fast_fill(cdata.conn_entries, NULL_PART);
@@ -942,13 +930,13 @@ void init_conn_graph(const problem& prob, const vtx_vt& part, mem_t& mem){
 }
 
 //initializes datastructures
-void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top){
+cdata_t truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top){
     const matrix_t g = prob.g;
     ordinal_t n = g.numRows();
-    cdata_t& cdata = mem.cd_mem;
+    cdata_t cdata;
     cdata.init = false;
-    cdata.conn_offsets = Kokkos::subview(cdata.conn_offsets, std::make_pair(static_cast<ordinal_t>(0), n + 1));
-    cdata.conn_table_sizes = Kokkos::subview(cdata.conn_table_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
+    cdata.conn_offsets = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
+    cdata.conn_table_sizes = Kokkos::subview(mem.p_mem.cluster_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
     Kokkos::parallel_for("comp conn row size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(!top) degree *= 1.2;
@@ -996,39 +984,28 @@ void truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top)
     }, mem.s_mem.scan_host);
     exec_space().fence();
     gain_size = mem.s_mem.scan_host();
-    cdata.conn_vals = Kokkos::subview(cdata.conn_vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
-    cdata.conn_entries = Kokkos::subview(cdata.conn_entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
+    cdata.conn_vals = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
+    cdata.conn_entries = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.c_graph = matrix_t("conn graph", g.numRows(), g.numRows(), gain_size, cdata.conn_vals, cdata.conn_offsets, cdata.conn_entries);
-    Kokkos::deep_copy(exec_space(), mem.p_mem.pvals, 0);
-    Kokkos::deep_copy(exec_space(), mem.p_mem.dest_part, NULL_PART);
+    gain_vt pval_init_subview = Kokkos::subview(mem.p_mem.pvals, std::make_pair(static_cast<ordinal_t>(0), n));
+    vtx_vt dest_part_init_subview = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), n));
+    Kokkos::deep_copy(exec_space(), pval_init_subview, 0);
+    Kokkos::deep_copy(exec_space(), dest_part_init_subview, NULL_PART);
+    return cdata;
 }
 
 template <bool uniform>
-void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& input_mem, ExperimentLoggerUtil<scalar_t>& experiment){
-    Kokkos::Timer y;
-    // contains reusable memory to avoid repeated allocations/deallocations
-    // some of this memory contains state information
-    mem_t mem(input_mem, g);
-    // initialize metadata
-    if(!best_state.init){
-        best_state.mod = -1.0;
-        best_state.total_deg = gain_vt("total degree of clusters", g.numRows());
-        best_state.g_deg = stat::sum(wdeg);
-        best_state.cut = best_state.g_deg;
-        best_state.label_count = g.numRows();
-        Kokkos::deep_copy(best_state.total_deg, wdeg);
-        best_state.init = true;
-    }
+void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem){
     problem prob;
     prob.g = g;
     prob.wdeg = wdeg;
     prob.use_team = (g.nnz() / g.numRows() >= 8);
-    refine_data curr_state = clone_refine_data(best_state);
-    vtx_vt part = mem.p_mem.part;
+    refine_data curr_state(best_state);
+    vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
+    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(prob, part, mem);
+        init_conn_graph<uniform>(prob, part, cdata, mem);
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;
@@ -1045,31 +1022,23 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
         while(count++ < limit){
             iter_count++;
             vtx_vt moves;
-            matrix_t c_graph = mem.cd_mem.c_graph;
-            if(!mem.cd_mem.init){
+            matrix_t c_graph = cdata.c_graph;
+            if(!cdata.init){
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
             moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
             if(moves.extent(0) == 0) break;
-            perform_moves<uniform>(prob, part, moves, mem, curr_state);
+            perform_moves<uniform>(prob, part, moves, cdata, mem, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
-            if(curr_state.mod > best_state.mod){
-                copy_refine_data(best_state, curr_state);
+            if(curr_state.obj > best_state.obj){
+                best_state.copy(curr_state);
                 Kokkos::deep_copy(exec_space(), best_part, part);
             }
         }
     }
     Kokkos::fence();
-    input_mem.p_mem.offset_mid = mem.p_mem.offset_mid;
-    input_mem.p_mem.offset_large = mem.p_mem.offset_large;
     relabel_contiguously(best_part, best_state, mem);
-    //divide cut by 2 because each cut edge is counted from both sides
-    typename ExperimentLoggerUtil<scalar_t>::CoarseLevel cl(best_state.cut / 2, 0, g.nnz(), g.numRows(), y.seconds(), iter_t.seconds(), iter_count, iter_count);
-    // std::cout << "Avg iteration time: " << (iter_t.seconds() / iter_count) << std::endl;
-    experiment.addCoarseLevel(cl);
-    y.reset();
-    iter_t.reset();
 }
 };
 

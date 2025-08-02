@@ -41,9 +41,6 @@
 #include <limits>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
-#include "KokkosKernels_HashmapAccumulator.hpp"
-#include "KokkosKernels_Uniform_Initialized_MemoryPool.hpp"
-#include "ExperimentLoggerUtil.hpp"
 #include "memory_store.hpp"
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
@@ -91,7 +88,7 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
-    using mem_t = memory_store<matrix_t, part_t>;
+    using mem_t = memory_store<matrix_t>;
     static constexpr ordinal_t get_null_val() {
         // this value must line up with the null value used by the hashmap
         // accumulator
@@ -243,7 +240,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     ordinal_t n = g.numRows();
 
     Kokkos::Timer timer;
-    edge_view_t hrow_map = Kokkos::subview(mem.cd_mem.conn_offsets, std::make_pair((ordinal_t)0, nc + 1));
+    edge_view_t hrow_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair((ordinal_t)0, nc + 1));
     Kokkos::deep_copy(exec_space(), hrow_map, 0);
     countingFunctor countF(g, vcmap, hrow_map);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
@@ -258,10 +255,10 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
     }, mem.s_mem.scan_host);
     exec_space().fence();
     hash_size = mem.s_mem.scan_host();
-    vtx_view_t htable = Kokkos::subview(mem.cd_mem.conn_entries, std::make_pair((edge_offset_t)0, hash_size));
+    vtx_view_t htable = Kokkos::subview(mem.p_mem.entries, std::make_pair((edge_offset_t)0, hash_size));
     fast_fill(htable, -1);
     // Kokkos::deep_copy(exec_space(), htable, -1);
-    wgt_view_t hvals = Kokkos::subview(mem.cd_mem.conn_vals, std::make_pair((edge_offset_t)0, hash_size));
+    wgt_view_t hvals = Kokkos::subview(mem.p_mem.vals, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), hvals, 0);
     //insert each coarse vertex into a bucket determined by a hash
     //use linear probing to resolve conflicts

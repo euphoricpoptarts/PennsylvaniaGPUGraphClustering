@@ -40,7 +40,9 @@
 #include <limits>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
+#include "Kokkos_UnorderedMap.hpp"
 #include "memory_store.hpp"
+#include "cluster_data.h"
 
 namespace jet_community {
 
@@ -60,9 +62,8 @@ public:
     using policy_t = typename Kokkos::RangePolicy<exec_space>;
     using team_policy_t = typename Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
-    using mem_t = memory_store<matrix_t, part_t>;
-    using stat = part_stat<matrix_t, part_t>;
-    using refine_data = typename stat::refine_data;
+    using mem_t = memory_store<matrix_t>;
+    using refine_data = cluster_data<matrix_t>;
     // there is a problem edge-case in kokkos with MaxLoc that can be triggered rarely for any input graph
     // the problem will be fixed soon, use MaxFirstLoc in meantime
     using argmax_reducer_t = Kokkos::MaxFirstLoc<uint32_t, edge_offset_t, Device>;
@@ -195,9 +196,10 @@ public:
         });
         rfd.label_count = parallel_map_construct(vcmap, n, hn, mem);
         rfd.total_deg = wgt_vt("coarse total degree", rfd.label_count);
+        wgt_vt total_deg = rfd.total_deg;
         Kokkos::parallel_for("add degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
             ordinal_t label = vcmap(i);
-            Kokkos::atomic_add(&rfd.total_deg(label), vtx_w(i));
+            Kokkos::atomic_add(&total_deg(label), vtx_w(i));
         });
 
         return vcmap;
