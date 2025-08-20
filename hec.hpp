@@ -73,68 +73,51 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    static ordinal_t parallel_map_construct(part_vt vcmap, const ordinal_t n, const vtx_vt hn, mem_t& mem) {
+    static ordinal_t parallel_map_construct(part_vt vcmap, const ordinal_t n, const vtx_vt hn) {
 
-        ordinal_t perm_length = n;
-        //construct mapping using heaviest edges
-        ordinal_t iter = 0;
-        vtx_vt curr_perm;
-        while (perm_length > 0) {
-            vtx_vt in_deg = Kokkos::subview(mem.s_mem.zeros1, std::make_pair(static_cast<ordinal_t>(0), n));
-            Kokkos::parallel_for(policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i) {
-                ordinal_t u = perm_length == n ? i : curr_perm(i);
-                ordinal_t v = hn(u);
-                if(u == v) {
-                    return;
-                }
-                hasher_t hash;
-                int condition = hash(u + iter) < hash(v + iter);
-                // need to enforce an ordering condition to break cycles
-                if((condition) && vcmap(v) == ORD_MAX) Kokkos::atomic_add(&in_deg(v), 1);
-            });
-            Kokkos::parallel_for(policy_t(0, perm_length), KOKKOS_LAMBDA(ordinal_t i) {
-                ordinal_t u = perm_length == n ? i : curr_perm(i);
-                if(in_deg(u) > 0){
-                    in_deg(u) = 0;
-                    return;
-                }
-                ordinal_t v = hn(u);
-                if(u == v) {
-                    vcmap(u) = u;
-                    return;
-                }
-                ordinal_t cv = v < u ? v : u;
-                hasher_t hash;
-                int condition = hash(u + iter) < hash(v + iter);
-                if(!condition) return;
-                if (Kokkos::atomic_compare_exchange(&vcmap(v), ORD_MAX, ORD_MAX - 1) == ORD_MAX) {
-                    vcmap(u) = cv;
-                    vcmap(v) = cv;
-                }
-                else {
-                    if (vcmap(v) < n) {
-                        vcmap(u) = vcmap(v);
-                    }
-                    else {
-                        vcmap(u) = ORD_MAX;
-                    }
-                }
-            });
-            vtx_vt vtx3 = mem.p_mem.order1;
-            Kokkos::parallel_scan(policy_t(0, perm_length), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final) {
-                ordinal_t u = perm_length == n ? i : curr_perm(i);
-                if (vcmap(u) >= n) {
-                    if(final){
-                        vtx3(update) = u;
-                    }
-                    update++;
-                }
-            }, perm_length);
-            vtx_vt next_perm = Kokkos::subview(vtx3, std::make_pair(static_cast<ordinal_t>(0), perm_length));
-            curr_perm = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), perm_length));
-            Kokkos::deep_copy(exec_space(), curr_perm, next_perm);
-            iter++;
-        }
+        // compute connected components on the graph induced by hn
+        // in this kernel we ignore edges that go towards a higher ordinal vertex
+        Kokkos::parallel_for("connected components part 1", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
+            ordinal_t now = i;
+            ordinal_t then = hn(i);
+
+            if(now == then){
+                vcmap(i) = i;
+                return;
+            }
+            
+            // pointer-chasing
+            hasher_t hash;
+            while(hash(now) > hash(then)){
+                now = then;
+                then = hn(then);
+            }
+
+            if(now != i){
+                vcmap(i) = now;
+                // other vertices in path will get here, except for now
+                vcmap(now) = now;
+            }
+            
+        });
+
+        // in this kernel we consider the edges ignored by the previous kernel
+        // in order to connect vertices left unassigned by previous kernel
+        Kokkos::parallel_for("connected components part 2", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
+            if(vcmap(i) != ORD_MAX) return;
+            ordinal_t now = i;
+            ordinal_t then = hn(i);
+
+            // pointer-chasing in the opposite direction
+            hasher_t hash;
+            while(vcmap(now) == ORD_MAX && hash(now) < hash(then)){
+                now = then;
+                then = hn(then);
+            }
+
+            vcmap(i) = vcmap(now);
+        });
+
         ordinal_t nc = 0;
         Kokkos::parallel_scan("assign aggregates", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
             if(vcmap(u) == u){
@@ -166,7 +149,7 @@ public:
         part_vt vcmap("vcmap", n);
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
 
-        float gamma = 1.0 / static_cast<float>(rfd.g_deg);
+        float gamma = rfd.get_penalty_modifier();
         Kokkos::parallel_for("Heaviest HN", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
             ordinal_t i = thread.league_rank();
             edge_offset_t end = g.graph.row_map(i + 1);
@@ -194,13 +177,7 @@ public:
                 }
             });
         });
-        rfd.label_count = parallel_map_construct(vcmap, n, hn, mem);
-        rfd.total_deg = wgt_vt("coarse total degree", rfd.label_count);
-        wgt_vt total_deg = rfd.total_deg;
-        Kokkos::parallel_for("add degree", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-            ordinal_t label = vcmap(i);
-            Kokkos::atomic_add(&total_deg(label), vtx_w(i));
-        });
+        rfd.label_count = parallel_map_construct(vcmap, n, hn);
 
         return vcmap;
     }

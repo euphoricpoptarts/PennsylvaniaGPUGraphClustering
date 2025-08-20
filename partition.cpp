@@ -127,7 +127,14 @@ matrix_t constraint_graph(const matrix_t& g, const part_vt& constraint, vtx_view
     return cg;
 }
 
-part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
+static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
+    Kokkos::parallel_for("set v weights", r_policy(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
+        ordinal_t c = map(i);
+        Kokkos::atomic_add(&out(c), in(i));
+    });
+}
+
+part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
@@ -135,7 +142,13 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
     ref_t refiner;
     while(true) {
         clt c = levels[levels.size() - 1];
-        part_vt part = hec_t::coarsen_HEC(c.mtx, c.wdeg, constraint, mem, rfd);
+        part_vt part("cluster assignments", c.mtx.numRows());
+        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+            part(x) = x;
+        });
+        if(levels.size() == 1) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, true, mem);
+        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, true, mem);
+        part = hec_t::coarsen_HEC(c.mtx, c.wdeg, part, mem, rfd);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -144,26 +157,21 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
             if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, part, rfd.label_count, mem);
             else next_clt = contracter.build_coarse_graph<false>(c, part, rfd.label_count, mem);
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
-            part_vt next_constraint("next constraint", rfd.label_count);
-            Kokkos::parallel_for("set next", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-                ordinal_t label = part(i);
-                next_constraint(label) = constraint(i);
-            });
-            constraint = next_constraint;
-            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
+            coarsen_vtx_w(c.wdeg, next_clt.wdeg, part);
+
+            rfd.update(next_clt.mtx, next_clt.wdeg);
+
             levels.push_back(next_clt);
             aggregate += t.seconds();
         } else {
             break;
         }
     }
-    rfd.cut = pstat::get_total_cut(levels.back().mtx, parts.back());
-    rfd.obj = pstat::modularity(rfd.g_deg,rfd.cut, rfd.total_deg);
 
-    std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
+    // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
     experiment.addMeasurement(Measurement::Contract, aggregate);
-    std::cout << rfd.obj << std::endl;
-    std::cout << rfd.label_count << std::endl;
+    // std::cout << rfd.obj << std::endl;
+    // std::cout << rfd.label_count << std::endl;
     
     for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
@@ -172,7 +180,7 @@ part_vt leiden_part(mem_t& mem, part_vt constraint, clt top, rfd_t& rfd, Experim
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem);
+        // refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem);
     }
     return parts[0];
 }
@@ -303,23 +311,24 @@ part_vt partition(matrix_t g,
     Kokkos::fence();
     Kokkos::Timer t;
     std::cout << std::setprecision(6);
-    part_vt part = louvain_part(mem, c, rfd, experiment);
+    part_vt part = leiden_part(mem, c, rfd, experiment);
     double time = t.seconds();
     experiment.setModularity(rfd.obj);
     experiment.addMeasurement(Measurement::Total, time);
     experiment.setEdgeCut(rfd.cut / 2);
-    std::cout << time << std::endl;
-    if(false){
-        double obj = rfd.obj;
-        do {
-            obj = rfd.obj;
-            // connected_comps(g, part);
-            // c.mtx = constraint_graph(g, part, refiner.get_entries_view());
-            Kokkos::Timer x;
-            part = leiden_part(mem, part, c, rfd, experiment);
-            std::cout << x.seconds() << std::endl;
-        } while(obj < rfd.obj);
-    }
+    std::cout << "Cluster time: " << time << std::endl;
+    std::cout << "Modularity: " << rfd.obj << std::endl;
+    // if(false){
+    //     double obj = rfd.obj;
+    //     do {
+    //         obj = rfd.obj;
+    //         // connected_comps(g, part);
+    //         // c.mtx = constraint_graph(g, part, refiner.get_entries_view());
+    //         Kokkos::Timer x;
+    //         part = leiden_part(mem, part, c, rfd, experiment);
+    //         std::cout << x.seconds() << std::endl;
+    //     } while(obj < rfd.obj);
+    // }
     mod = rfd.obj;
     // connected_comps(g, part);
     // ordinal_t labels = pstat::get_total_labels(part);
