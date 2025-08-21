@@ -72,8 +72,104 @@ public:
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
+    static void ensure_gamma_connectivity(part_vt vcmap, const ordinal_t n, const vtx_vt hn, const wgt_vt wdeg, mem_t& mem, refine_data& rfd) {
+
+        vtx_vt dist = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
+        Kokkos::deep_copy(exec_space(), dist, 0);
+
+        Kokkos::parallel_for("find dist", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
+            int d = 0;
+
+            ordinal_t now = i;
+
+            while(vcmap(now) != now){
+                now = hn(now);
+                d++;
+            }
+
+            if(now != i) dist(i) = d;
+            Kokkos::atomic_max(&dist(now), d);
+        });
+
+        // create a contiguous range where we can lookup the size of the BFS prior to each level
+        ordinal_t t_dist = 0;
+        Kokkos::parallel_scan("scan dists", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+            if(vcmap(i) == i){
+                ordinal_t val = dist(i) + 1;
+                if(final){
+                    dist(i) = update;
+                }
+                update += val;
+            }
+        }, t_dist);
+
+        wgt_vt penalty = mem.p_mem.pvals;
+        wgt_vt total_size = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), t_dist));
+        Kokkos::deep_copy(exec_space(), total_size, 0);
+        Kokkos::parallel_for("add wdeg", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            int d = dist(i);
+            ordinal_t c = vcmap(i);
+            if(c == i) d = 0;
+            int offset = dist(c) + d;
+            penalty(i) = Kokkos::atomic_fetch_add(&total_size(offset), wdeg(i));
+        });
+        Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update, const bool final){
+            scalar_t val = total_size(i);
+            if(final){
+                total_size(i) = update;
+            }
+            update += val;
+        });
+        float gamma = rfd.get_penalty_modifier();
+        auto score = mem.p_mem.obj_persistent;
+        Kokkos::parallel_for("add wdeg", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            int d = dist(i);
+            ordinal_t c = vcmap(i);
+            if(c == i) d = 0;
+            int offset = dist(c);
+            scalar_t prior_penalty = total_size(offset + d) - total_size(offset);
+            // ordering by penalty within each tree now represents a pseudo BFS
+            scalar_t total_penalty = penalty(i) + prior_penalty;
+            float scaled_penalty = gamma*wdeg(i)*total_penalty;
+            if(score(i) < scaled_penalty) {
+                // break the tree here
+                vcmap(i) = i;
+            }
+        });
+        Kokkos::parallel_for("find new root", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
+            ordinal_t now = i;
+
+            while(vcmap(now) != now){
+                now = hn(now);
+            }
+
+            if(now != i) vcmap(i) = vcmap(now);
+        });
+    }
+
+    static ordinal_t contigitize_clusters(part_vt vcmap, const ordinal_t n) {
+        ordinal_t nc = 0;
+        Kokkos::parallel_scan("assign contiguous id", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
+            if(vcmap(u) == u){
+                if(final){
+                    vcmap(u) = update;
+                }
+                update++;
+            } else if(final){
+                vcmap(u) = vcmap(u) + n;
+            }
+        }, nc);
+        Kokkos::parallel_for("propagate ids", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u) {
+            if(vcmap(u) >= n) {
+                ordinal_t c_id = vcmap(u) - n;
+                vcmap(u) = vcmap(c_id);
+            }
+        });
+        return nc;
+    }
+
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    static ordinal_t parallel_map_construct(part_vt vcmap, const ordinal_t n, const vtx_vt hn) {
+    static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn) {
 
         // compute connected components on the graph induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
@@ -117,29 +213,10 @@ public:
 
             vcmap(i) = vcmap(now);
         });
-
-        ordinal_t nc = 0;
-        Kokkos::parallel_scan("assign aggregates", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
-            if(vcmap(u) == u){
-                if(final){
-                    vcmap(u) = update;
-                }
-                update++;
-            } else if(final){
-                vcmap(u) = vcmap(u) + n;
-            }
-        }, nc);
-        Kokkos::parallel_for("propagate aggregates", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t u) {
-            if(vcmap(u) >= n) {
-                ordinal_t c_id = vcmap(u) - n;
-                vcmap(u) = vcmap(c_id);
-            }
-        });
-        return nc;
     }
 
     static part_vt coarsen_HEC(const matrix_t& g,
-        const wgt_vt& vtx_w,
+        const wgt_vt& wdeg,
         const part_vt& constraint,
         mem_t& mem,
         refine_data& rfd) {
@@ -150,18 +227,19 @@ public:
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
 
         float gamma = rfd.get_penalty_modifier();
+        auto score = mem.p_mem.obj_persistent;
         Kokkos::parallel_for("Heaviest HN", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
             ordinal_t i = thread.league_rank();
             edge_offset_t end = g.graph.row_map(i + 1);
             edge_offset_t start = g.graph.row_map(i);
-            float multi = gamma*vtx_w(i);
+            float multi = gamma*wdeg(i);
             typename Kokkos::MaxLoc<float,edge_offset_t,Device>::value_type argmax{0, end};
             // get neighbor maximizing objective
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, Kokkos::ValLocScalar<float,edge_offset_t>& local) {
                 ordinal_t v = g.graph.entries(idx);
                 if(constraint(i) != constraint(v)) return;
                 scalar_t wgt = g.values(idx);
-                float val = static_cast<float>(wgt) - multi*vtx_w(v);
+                float val = static_cast<float>(wgt) - multi*wdeg(v);
                 if(val >= local.val){
                     local.val = val;
                     local.loc = idx;
@@ -171,13 +249,17 @@ public:
             Kokkos::single(Kokkos::PerTeam(thread), [=](){
                 if(argmax.loc >= start && argmax.loc < end && argmax.val >= 0){
                     ordinal_t h = g.graph.entries(argmax.loc);
+                    score(i) = g.values(argmax.loc);
                     hn(i) = h;
                 } else {
                     hn(i) = i;
+                    score(i) = 0;
                 }
             });
         });
-        rfd.label_count = parallel_map_construct(vcmap, n, hn);
+        find_trees(vcmap, n, hn);
+        ensure_gamma_connectivity(vcmap, n, hn, wdeg, mem, rfd);
+        rfd.label_count = contigitize_clusters(vcmap, n);
 
         return vcmap;
     }

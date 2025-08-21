@@ -38,7 +38,7 @@ struct memory_store {
         vtx_vt entries;
         vtx_vt cluster_sizes;
         obj_vt obj_persistent;
-        gain_vt pvals;
+        gain_vt pvals, pvals_clone;
         vtx_vt part, dest_part;
         vtx_vt order1, order2;
         vtx_vt dest_cache;
@@ -52,6 +52,7 @@ struct memory_store {
             row_map = edge_vt(Kokkos::ViewAllocateWithoutInitializing("row map"), n + 1);
             obj_persistent = obj_vt(Kokkos::ViewAllocateWithoutInitializing("gain persistent"), n);
             pvals = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals"), n);
+            pvals_clone = gain_vt(Kokkos::ViewAllocateWithoutInitializing("p vals clone"), n);
             dest_part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
             dest_cache = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
