@@ -50,6 +50,7 @@
 
 using namespace jet_community;
 using ref_t = jet_refiner<matrix_t>;
+using vtx_vt = typename ref_t::vtx_vt;
 using rfd_t = cluster_data<matrix_t>;
 using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
@@ -134,6 +135,13 @@ static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
     });
 }
 
+static void downsample(vtx_vt in, vtx_vt out, vtx_view_t map){
+    Kokkos::parallel_for("set v weights", r_policy(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
+        ordinal_t c = map(i);
+        out(c) = in(i);
+    });
+}
+
 part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
@@ -146,8 +154,8 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        if(levels.size() == 1) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, true, mem);
-        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, true, mem);
+        if(levels.size() == 1) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, true, mem, part);
+        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, true, mem, part);
         part = hec_t::coarsen_HEC(c.mtx, c.wdeg, part, mem, rfd);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
@@ -185,7 +193,8 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
     return parts[0];
 }
 
-part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
+template <bool constrained>
+part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, vtx_vt constraint){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
@@ -198,8 +207,8 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = x;
         });
-        if(levels.size() == 1) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, true, mem);
-        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, true, mem);
+        if(levels.size() == 1) refiner.jet_refine<true, constrained>(c.mtx, c.wdeg, part, rfd, true, mem, constraint);
+        else refiner.jet_refine<false, constrained>(c.mtx, c.wdeg, part, rfd, true, mem, constraint);
         parts.push_back(part);
         if(rfd.label_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -210,12 +219,20 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
             Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
             levels.push_back(next_clt);
+
+            if(constrained) {
+                vtx_vt next_constraint("next constraint", rfd.label_count);
+                downsample(constraint, next_constraint, part);
+                constraint = next_constraint;
+            }
+
             aggregate += t.seconds();
         } else {
             break;
         }
     }
 
+    // std::cout << "Post coarsen obj: " << rfd.obj << std::endl;
     if(levels.size() > 1){
         // last level has the same partition as previous level
         // so refining this level on the uncoarsening pass
@@ -232,69 +249,12 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             part(x) = coarse_part(part(x));
         });
-        if(i == 0) refiner.jet_refine<true>(c.mtx, c.wdeg, part, rfd, false, mem);
-        else refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem);
+        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, false, mem, constraint);
+        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, constraint);
     }
 
     experiment.addMeasurement(Measurement::Contract, aggregate);
-    std::cout << rfd.obj << std::endl;
-    return parts[0];
-}
-
-part_vt rec_part(mem_t& mem, clt top, rfd_t& rfd, part_vt constraint, ExperimentLoggerUtil<value_t>& experiment){
-    std::vector<clt> levels;
-    std::vector<part_vt> parts;
-    levels.push_back(top);
-    double aggregate = 0;
-    bool stop = false;
-    ref_t refiner;
-    while(true) {
-        clt c = levels[levels.size() - 1];
-        // std::cout << "Pre-refine" << std::endl;
-        part_vt part("cluster assignments", c.mtx.numRows());
-        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = x;
-        });
-        matrix_t cg = constraint_graph(c.mtx, constraint, mem.p_mem.entries);
-        refiner.jet_refine<false>(cg, c.wdeg, part, rfd, true, mem);
-        parts.push_back(part);
-        if(rfd.label_count < c.mtx.numRows()){
-            Kokkos::Timer t;
-            contracter_t contracter;
-            clt next_clt;
-            if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, part, rfd.label_count, mem);
-            else next_clt = contracter.build_coarse_graph<false>(c, part, rfd.label_count, mem);
-            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
-            part_vt next_constraint("active constraint", rfd.label_count);
-            Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-                next_constraint(part(x)) = constraint(x);
-            });
-            constraint = next_constraint;
-            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
-            levels.push_back(next_clt);
-            aggregate += t.seconds();
-        } else if(!stop) {
-            Kokkos::deep_copy(constraint, 0);
-            parts.pop_back();
-            stop = true;
-            continue;
-        } else {
-            break;
-        }
-    }
-
-    experiment.addMeasurement(Measurement::Contract, aggregate);
-    std::cout << rfd.obj << std::endl;
-    
-    for(int i = levels.size() - 2; i >= 0; i--){
-        clt c = levels[i];
-        part_vt coarse_part = parts[i + 1];
-        part_vt part = parts[i];
-        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = coarse_part(part(x));
-        });
-        refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem);
-    }
+    // std::cout << "Post uncoarsen obj: " << rfd.obj << std::endl;
     return parts[0];
 }
 
@@ -311,12 +271,24 @@ part_vt partition(matrix_t g,
     Kokkos::fence();
     Kokkos::Timer t;
     std::cout << std::setprecision(6);
-    part_vt part = leiden_part(mem, c, rfd, experiment);
+    part_vt constraint;
+    part_vt part = louvain_part<false>(mem, c, rfd, experiment, constraint);
     double time = t.seconds();
+    std::cout << "Cluster time: " << time << std::endl;
+    std::cout << "Cut: " << rfd.cut / 2 << std::endl;
+    t.reset();
+    for(int i = 0; i < 5; i++){
+        rfd.update(g, vweights);
+        constraint = part;
+        part = louvain_part<true>(mem, c, rfd, experiment, constraint);
+        time = t.seconds();
+        std::cout << "Cluster time: " << time << std::endl;
+        std::cout << "Cut: " << rfd.cut / 2 << std::endl;
+        t.reset();
+    }
     experiment.setModularity(rfd.obj);
     experiment.addMeasurement(Measurement::Total, time);
     experiment.setEdgeCut(rfd.cut / 2);
-    std::cout << "Cluster time: " << time << std::endl;
     std::cout << "Modularity: " << rfd.obj << std::endl;
     // if(false){
     //     double obj = rfd.obj;

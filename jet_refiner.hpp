@@ -68,7 +68,7 @@ public:
     using scalar_t = typename matrix_t::value_type;
     // need some trickery because make_signed is undefined for floating point types
     using gain_t = typename std::conditional_t<std::is_signed_v<scalar_t>, type_identity<scalar_t>, std::make_signed<scalar_t>>::type;
-    using vtx_vt = Kokkos::View<ordinal_t*, Device>;
+    using vtx_vt = Kokkos::View<ordinal_t*, exec_space>;
     using vtx_svt = Kokkos::View<ordinal_t, Device>;
     using wgt_view_t = Kokkos::View<scalar_t*, Device>;
     using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
@@ -154,8 +154,8 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
 
 //determines which vertices (if any) should be moved to another part to improve objective
 //8 kernels, 2 device-host syncs
-template <bool uniform>
-vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio){
+template <bool uniform, bool constrained>
+vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -193,6 +193,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
             gain_t j_val = c_graph.values(j);
             if(j_val > 0 && j_val >= b_conn){
                 ordinal_t px = c_graph.graph.entries(j);
+                if(constrained && constraint(px) != constraint(i)) continue;
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                 if(j_conn >= b_conn){
                     b_conn = j_conn;
@@ -230,6 +231,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
                 gain_t j_val = c_graph.values(j);
                 if(j_val > 0 && j_val >= maxl){
                     ordinal_t px = c_graph.graph.entries(j);
+                    if(constrained && constraint(px) != constraint(i)) continue;
                     float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                     if(j_conn >= maxl){
                         // this is not deterministic unless the case j_conn == maxl is handled properly
@@ -994,8 +996,14 @@ cdata_t truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool t
     return cdata;
 }
 
-template <bool uniform>
-void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem){
+void clone_pval(mem_t& mem, ordinal_t n){
+    gain_vt pval_subview = Kokkos::subview(mem.p_mem.pvals, std::make_pair(static_cast<ordinal_t>(0), n));
+    gain_vt pval_clone_subview = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
+    Kokkos::deep_copy(exec_space(), pval_clone_subview, pval_subview);
+}
+
+template <bool uniform, bool constrained>
+void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
     problem prob;
     prob.g = g;
     prob.wdeg = wdeg;
@@ -1027,13 +1035,14 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
-            moves = jet_lp<uniform>(prob, c_graph, part, curr_state, mem, filter_ratio);
+            moves = jet_lp<uniform, constrained>(prob, c_graph, part, curr_state, mem, filter_ratio, constraint);
             if(moves.extent(0) == 0) break;
             perform_moves<uniform>(prob, part, moves, cdata, mem, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
             if(curr_state.obj > best_state.obj){
                 best_state.copy(curr_state);
                 Kokkos::deep_copy(exec_space(), best_part, part);
+                // clone_pval(mem, g.numRows());
             }
         }
     }
