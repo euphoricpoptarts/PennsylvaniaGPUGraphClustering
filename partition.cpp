@@ -142,32 +142,39 @@ static void downsample(vtx_vt in, vtx_vt out, vtx_view_t map){
     });
 }
 
-part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment){
+template <bool improve>
+part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, part_vt input){
     std::vector<clt> levels;
     std::vector<part_vt> parts;
     levels.push_back(top);
     double aggregate = 0;
     ref_t refiner;
+    part_vt part("cluster assignments", top.mtx.numRows());
+    Kokkos::parallel_for("set initial assignments", r_policy(0, top.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
+        part(x) = x;
+    });
+    if(improve) Kokkos::deep_copy(part, input);
     while(true) {
         clt c = levels[levels.size() - 1];
-        part_vt part("cluster assignments", c.mtx.numRows());
-        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = x;
-        });
-        if(levels.size() == 1) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, true, mem, part);
-        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, true, mem, part);
-        part = hec_t::coarsen_HEC(c.mtx, c.wdeg, part, mem, rfd);
-        parts.push_back(part);
-        if(rfd.label_count < c.mtx.numRows()){
+        if(levels.size() == 1) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
+        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
+        part_vt louv = part;
+        int coarse_vtx_count = 0;
+        part_vt coarse_map = hec_t::coarsen_HEC(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
+        parts.push_back(coarse_map);
+        if(coarse_vtx_count < c.mtx.numRows()){
             Kokkos::Timer t;
             contracter_t contracter;
             clt next_clt;
-            if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, part, rfd.label_count, mem);
-            else next_clt = contracter.build_coarse_graph<false>(c, part, rfd.label_count, mem);
-            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
-            coarsen_vtx_w(c.wdeg, next_clt.wdeg, part);
+            if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, coarse_map, coarse_vtx_count, mem);
+            else next_clt = contracter.build_coarse_graph<false>(c, coarse_map, coarse_vtx_count, mem);
+            next_clt.wdeg = wgt_view_t("weighted degree 2", coarse_vtx_count);
+            coarsen_vtx_w(c.wdeg, next_clt.wdeg, coarse_map);
 
-            rfd.update(next_clt.mtx, next_clt.wdeg);
+            part = part_vt("cluster assignments coarse", coarse_vtx_count);
+            downsample(louv, part, coarse_map);
+
+            // rfd.update(next_clt.mtx, next_clt.wdeg);
 
             levels.push_back(next_clt);
             aggregate += t.seconds();
@@ -175,6 +182,8 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
             break;
         }
     }
+
+    parts[parts.size() - 1] = part;
 
     // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
     experiment.addMeasurement(Measurement::Contract, aggregate);
@@ -184,11 +193,12 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
     for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
         part_vt coarse_part = parts[i + 1];
-        part_vt part = parts[i];
+        part_vt fine_part = parts[i];
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = coarse_part(part(x));
+            fine_part(x) = coarse_part(fine_part(x));
         });
-        // refiner.jet_refine<false>(c.mtx, c.wdeg, part, rfd, false, mem);
+        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
     }
     return parts[0];
 }

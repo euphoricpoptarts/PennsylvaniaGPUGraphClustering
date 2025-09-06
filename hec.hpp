@@ -72,7 +72,7 @@ public:
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
-    static void ensure_gamma_connectivity(part_vt vcmap, const ordinal_t n, const vtx_vt hn, const wgt_vt wdeg, mem_t& mem, refine_data& rfd) {
+    static void ensure_gamma_connectivity(part_vt vcmap, const ordinal_t n, const vtx_vt hn, const wgt_vt wdeg, mem_t& mem, const refine_data& rfd) {
 
         vtx_vt dist = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
         Kokkos::deep_copy(exec_space(), dist, 0);
@@ -219,7 +219,8 @@ public:
         const wgt_vt& wdeg,
         const part_vt& constraint,
         mem_t& mem,
-        refine_data& rfd) {
+        const refine_data& rfd,
+        int& coarse_vtx_count) {
 
         ordinal_t n = g.numRows();
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -259,7 +260,7 @@ public:
         });
         find_trees(vcmap, n, hn);
         ensure_gamma_connectivity(vcmap, n, hn, wdeg, mem, rfd);
-        rfd.label_count = contigitize_clusters(vcmap, n);
+        coarse_vtx_count = contigitize_clusters(vcmap, n);
 
         return vcmap;
     }
