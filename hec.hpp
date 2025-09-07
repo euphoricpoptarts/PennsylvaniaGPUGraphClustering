@@ -40,6 +40,7 @@
 #include <limits>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
+#include "KokkosSparse_SortCrs.hpp"
 #include "Kokkos_UnorderedMap.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
@@ -71,79 +72,113 @@ public:
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
+    static constexpr ordinal_t split = 1000000000;
 
-    static void ensure_gamma_connectivity(part_vt vcmap, const ordinal_t n, const vtx_vt hn, const wgt_vt wdeg, mem_t& mem, const refine_data& rfd) {
+    static void ensure_gamma_connectivity(const matrix_t g, part_vt vcmap, part_vt constraint, const vtx_vt order, const ordinal_t n, const wgt_vt wdeg, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
-        vtx_vt dist = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
-        Kokkos::deep_copy(exec_space(), dist, 0);
+        vtx_vt row_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
+        vtx_vt store_atom = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<ordinal_t>(0), n));
+        vtx_vt ids = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
+        vtx_vt sort_order = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
+        Kokkos::deep_copy(exec_space(), row_map, 0);
 
-        Kokkos::parallel_for("find dist", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
-            int d = 0;
-
-            ordinal_t now = i;
-
-            while(vcmap(now) != now){
-                now = hn(now);
-                d++;
-            }
-
-            if(now != i) dist(i) = d;
-            Kokkos::atomic_max(&dist(now), d);
-        });
-
-        // create a contiguous range where we can lookup the size of the BFS prior to each level
-        ordinal_t t_dist = 0;
-        Kokkos::parallel_scan("scan dists", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-            if(vcmap(i) == i){
-                ordinal_t val = dist(i) + 1;
-                if(final){
-                    dist(i) = update;
-                }
-                update += val;
-            }
-        }, t_dist);
-
-        wgt_vt penalty = mem.p_mem.pvals;
-        wgt_vt total_size = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), t_dist));
-        Kokkos::deep_copy(exec_space(), total_size, 0);
-        Kokkos::parallel_for("add wdeg", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-            int d = dist(i);
+        Kokkos::parallel_for("compute cluster cardinality", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
             ordinal_t c = vcmap(i);
-            if(c == i) d = 0;
-            int offset = dist(c) + d;
-            penalty(i) = Kokkos::atomic_fetch_add(&total_size(offset), wdeg(i));
+            store_atom(i) = Kokkos::atomic_fetch_add(&row_map(c), 1);
         });
-        Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update, const bool final){
-            scalar_t val = total_size(i);
+
+        Kokkos::parallel_scan("scan offsets", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+            ordinal_t val = row_map(i);
+            if(final) row_map(i) = update;
+            update += val;
+            if(final && i + 1 == n){
+                row_map(n) = update;
+            }
+        });
+
+        Kokkos::parallel_for("insert", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
+            ordinal_t c = vcmap(i);
+            ordinal_t insert = row_map(c) + store_atom(i);
+            ids(insert) = i;
+            sort_order(insert) = order(i);
+        });
+
+        // sort_order is unneeded after this
+        KokkosSparse::sort_crs_matrix<exec_space, vtx_vt, vtx_vt, vtx_vt>(exec_space(), row_map, sort_order, ids);
+
+        wgt_vt total_size = mem.p_mem.pvals;
+        wgt_vt inner_conn = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
+        wgt_vt pvals = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
+        wgt_vt outer_conn("outer conn", n);
+        // gets the total size of each cluster during construction by order of ids view
+        Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
+            ordinal_t i = ids(x);
+            scalar_t val = wdeg(i);
             if(final){
-                total_size(i) = update;
+                total_size(x) = update;
             }
             update += val;
         });
         float gamma = rfd.get_penalty_modifier();
-        auto score = mem.p_mem.obj_persistent;
-        Kokkos::parallel_for("add wdeg", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-            int d = dist(i);
+        Kokkos::parallel_for("compute inner_conn", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
+            ordinal_t i = thread.league_rank();
+            edge_offset_t end = g.graph.row_map(i + 1);
+            edge_offset_t start = g.graph.row_map(i);
+            scalar_t result = 0;
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, scalar_t& update) {
+                ordinal_t v = g.graph.entries(idx);
+                if(vcmap(i) == vcmap(v) && order(v) < order(i)) update += g.values(idx);
+            }, result);
+            inner_conn(i) = result;
+        });
+
+        vtx_vt breakers("breakers", n);
+        Kokkos::deep_copy(exec_space(), breakers, n);
+
+        // break clusters if vertex i not well connect to cluster
+        Kokkos::parallel_for("find breakpoints (part 1)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
+            ordinal_t i = ids(x);
             ordinal_t c = vcmap(i);
-            if(c == i) d = 0;
-            int offset = dist(c);
-            scalar_t prior_penalty = total_size(offset + d) - total_size(offset);
-            // ordering by penalty within each tree now represents a pseudo BFS
-            scalar_t total_penalty = penalty(i) + prior_penalty;
-            float scaled_penalty = gamma*wdeg(i)*total_penalty;
-            if(score(i) < scaled_penalty) {
-                // break the tree here
-                vcmap(i) = i;
+            ordinal_t c_begin = row_map(c);
+            scalar_t prev_size = total_size(x) - total_size(c_begin);
+            if(inner_conn(i) < gamma*wdeg(i)*prev_size){
+                // break cluster on x
+                Kokkos::atomic_min(&breakers(c), x);
             }
         });
-        Kokkos::parallel_for("find new root", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
-            ordinal_t now = i;
 
-            while(vcmap(now) != now){
-                now = hn(now);
+        // gets the total outward connectivity of each cluster during construction by order of ids view
+        Kokkos::parallel_scan("scan outward connectivity (inclusive)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
+            ordinal_t i = ids(x);
+            // *2 to account for edges previously outside cluster that are now within it
+            scalar_t val = pvals(i) - 2*inner_conn(i);
+            update += val;
+            if(final){
+                outer_conn(x) = update;
             }
+        });
 
-            if(now != i) vcmap(i) = vcmap(now);
+        // break cluster if cluster not well connected to rest of constraint cluster
+        Kokkos::parallel_for("find breakpoints (part 2)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
+            ordinal_t i = ids(x);
+            ordinal_t c = vcmap(i);
+            ordinal_t c_begin = row_map(c);
+            scalar_t curr_size = total_size(x) + wdeg(i) - total_size(c_begin);
+            scalar_t other_size = total_deg(constraint(i)) - curr_size;
+            scalar_t outer = outer_conn(x);
+            if(c_begin > 0) outer -= outer_conn(c_begin - 1);
+            if(outer < gamma*curr_size*other_size){
+                // break cluster after x
+                Kokkos::atomic_min(&breakers(c), x + 1);
+            }
+        });
+
+        Kokkos::parallel_for("break clusters", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
+            ordinal_t i = ids(x);
+            ordinal_t c = vcmap(i);
+            if(x >= breakers(c)){
+                vcmap(i) = i;
+            }
         });
     }
 
@@ -169,7 +204,14 @@ public:
     }
 
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn) {
+    static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
+
+        Kokkos::parallel_for("set order", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            hasher_t hash;
+            // fix this
+            ordinal_t o = (ordinal_t)hash(i) % split;
+            order(i) = Kokkos::abs(o);
+        });
 
         // compute connected components on the graph induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
@@ -182,9 +224,8 @@ public:
                 return;
             }
             
-            // pointer-chasing
-            hasher_t hash;
-            while(hash(now) > hash(then)){
+            // pointer-chasing towards lowest order
+            while(order(now) > order(then)){
                 now = then;
                 then = hn(then);
             }
@@ -197,6 +238,12 @@ public:
             
         });
 
+        // flip the ordering for remaining unclustered vertices
+        // this also makes them higher ordered then all previously clustered vertices
+        Kokkos::parallel_for("update order", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            if(vcmap(i) == ORD_MAX) order(i) = 2*split - order(i);
+        });
+
         // in this kernel we consider the edges ignored by the previous kernel
         // in order to connect vertices left unassigned by previous kernel
         Kokkos::parallel_for("connected components part 2", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
@@ -204,9 +251,7 @@ public:
             ordinal_t now = i;
             ordinal_t then = hn(i);
 
-            // pointer-chasing in the opposite direction
-            hasher_t hash;
-            while(vcmap(now) == ORD_MAX && hash(now) < hash(then)){
+            while(vcmap(now) == ORD_MAX && order(now) > order(then)){
                 now = then;
                 then = hn(then);
             }
@@ -226,6 +271,7 @@ public:
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
         part_vt vcmap("vcmap", n);
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
+        vtx_vt order("order", n);
 
         float gamma = rfd.get_penalty_modifier();
         auto score = mem.p_mem.obj_persistent;
@@ -258,8 +304,8 @@ public:
                 }
             });
         });
-        find_trees(vcmap, n, hn);
-        ensure_gamma_connectivity(vcmap, n, hn, wdeg, mem, rfd);
+        find_trees(vcmap, n, hn, order);
+        ensure_gamma_connectivity(g, vcmap, constraint, order, n, wdeg, rfd.total_deg, mem, rfd);
         coarse_vtx_count = contigitize_clusters(vcmap, n);
 
         return vcmap;

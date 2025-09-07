@@ -1042,7 +1042,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
             if(curr_state.obj > best_state.obj){
                 best_state.copy(curr_state);
                 Kokkos::deep_copy(exec_space(), best_part, part);
-                // clone_pval(mem, g.numRows());
+                clone_pval(mem, g.numRows());
             }
         }
     }
