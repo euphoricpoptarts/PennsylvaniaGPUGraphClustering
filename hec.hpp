@@ -38,6 +38,7 @@
 // ************************************************************************
 #pragma once
 #include <limits>
+#include <random>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "KokkosSparse_SortCrs.hpp"
@@ -206,13 +207,6 @@ public:
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
     static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
 
-        Kokkos::parallel_for("set order", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-            hasher_t hash;
-            // fix this
-            ordinal_t o = (ordinal_t)hash(i) % split;
-            order(i) = Kokkos::abs(o);
-        });
-
         // compute connected components on the graph induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
         Kokkos::parallel_for("connected components part 1", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
@@ -260,6 +254,7 @@ public:
         });
     }
 
+    template <bool uniform>
     static part_vt coarsen_HEC(const matrix_t& g,
         const wgt_vt& wdeg,
         const part_vt& constraint,
@@ -268,41 +263,105 @@ public:
         int& coarse_vtx_count) {
 
         ordinal_t n = g.numRows();
+        float gamma = rfd.get_penalty_modifier();
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
         part_vt vcmap("vcmap", n);
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
         vtx_vt order("order", n);
 
-        float gamma = rfd.get_penalty_modifier();
-        auto score = mem.p_mem.obj_persistent;
-        Kokkos::parallel_for("Heaviest HN", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
-            ordinal_t i = thread.league_rank();
-            edge_offset_t end = g.graph.row_map(i + 1);
-            edge_offset_t start = g.graph.row_map(i);
-            float multi = gamma*wdeg(i);
-            typename Kokkos::MaxLoc<float,edge_offset_t,Device>::value_type argmax{0, end};
-            // get neighbor maximizing objective
-            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, Kokkos::ValLocScalar<float,edge_offset_t>& local) {
-                ordinal_t v = g.graph.entries(idx);
-                if(constraint(i) != constraint(v)) return;
-                scalar_t wgt = g.values(idx);
-                float val = static_cast<float>(wgt) - multi*wdeg(v);
-                if(val >= local.val){
-                    local.val = val;
-                    local.loc = idx;
-                }
-            
-            }, Kokkos::MaxLoc<float, edge_offset_t,Device>(argmax));
-            Kokkos::single(Kokkos::PerTeam(thread), [=](){
-                if(argmax.loc >= start && argmax.loc < end && argmax.val >= 0){
-                    ordinal_t h = g.graph.entries(argmax.loc);
-                    score(i) = g.values(argmax.loc);
-                    hn(i) = h;
-                } else {
+        vtx_vt well_conn("well connected", n);
+        const wgt_vt pvals = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
+        const wgt_vt total_deg = rfd.total_deg;
+        Kokkos::parallel_for("determine well connected", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            ordinal_t c = constraint(i);
+            scalar_t wd = wdeg(i);
+            // is vertex 'i' well connected to the rest of constraint cluster 'c'?
+            if(pvals(i) >= gamma*wd*(total_deg(c) - wd)) well_conn(i) = 1;
+            else well_conn(i) = 0;
+        });
+
+        std::random_device rd;
+        if(uniform){
+            // randomizations is only strictly necessary on top level graph
+            // randomization on successive levels is empirically detrimental to objective quality
+            ordinal_t seed = rd();
+            Kokkos::parallel_for("Heaviest HN", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i) {
+                edge_offset_t end = g.graph.row_map(i + 1);
+                edge_offset_t start = g.graph.row_map(i);
+                ordinal_t width = end - start;
+                float multi = gamma*wdeg(i);
+                hasher_t hash;
+                ordinal_t jx = hash(seed + i);
+                // 0.001 chance to self-aggregate
+                if(jx % 1000 == 0 || well_conn(i) == 0){
                     hn(i) = i;
-                    score(i) = 0;
+                    return;
                 }
+                jx = start + Kokkos::abs(jx % width);
+                // choose random satisfactory neighbor
+                for(edge_offset_t j = jx; j < end; j++){
+                    ordinal_t v = g.graph.entries(j);
+                    if(constraint(i) != constraint(v)) continue;
+                    if(well_conn(v) == 0) continue;
+                    scalar_t wgt = g.values(j);
+                    if(wgt >= multi*wdeg(v)){
+                        hn(i) = v;
+                        return;
+                    }
+                }
+                for(edge_offset_t j = start; j < jx; j++){
+                    ordinal_t v = g.graph.entries(j);
+                    if(constraint(i) != constraint(v)) continue;
+                    if(well_conn(v) == 0) continue;
+                    scalar_t wgt = g.values(j);
+                    if(wgt >= multi*wdeg(v)){
+                        hn(i) = v;
+                        return;
+                    }
+                }
+                hn(i) = i;
             });
+        } else {
+            Kokkos::parallel_for("Heaviest HN", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
+                ordinal_t i = thread.league_rank();
+                edge_offset_t end = g.graph.row_map(i + 1);
+                edge_offset_t start = g.graph.row_map(i);
+                float multi = gamma*wdeg(i);
+                if(well_conn(i) == 0){
+                    hn(i) = i;
+                    return;
+                }
+                typename Kokkos::MaxLoc<float,edge_offset_t,Device>::value_type argmax{0, end};
+                // get neighbor maximizing objective
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, Kokkos::ValLocScalar<float,edge_offset_t>& local) {
+                    ordinal_t v = g.graph.entries(idx);
+                    if(constraint(i) != constraint(v)) return;
+                    if(well_conn(v) == 0) return;
+                    scalar_t wgt = g.values(idx);
+                    float val = static_cast<float>(wgt) - multi*wdeg(v);
+                    if(val >= local.val){
+                        local.val = val;
+                        local.loc = idx;
+                    }
+                
+                }, Kokkos::MaxLoc<float, edge_offset_t,Device>(argmax));
+                Kokkos::single(Kokkos::PerTeam(thread), [=](){
+                    if(argmax.loc >= start && argmax.loc < end && argmax.val >= 0){
+                        ordinal_t h = g.graph.entries(argmax.loc);
+                        hn(i) = h;
+                    } else {
+                        hn(i) = i;
+                    }
+                });
+            });
+        }
+        ordinal_t seed = rd();
+        // this random ordering determines the spanning trees
+        // and the insertion order into each cluster
+        Kokkos::parallel_for("set order", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            hasher_t hash;
+            ordinal_t o = hash(i + seed);
+            order(i) = Kokkos::abs(o % split);
         });
         find_trees(vcmap, n, hn, order);
         ensure_gamma_connectivity(g, vcmap, constraint, order, n, wdeg, rfd.total_deg, mem, rfd);

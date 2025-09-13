@@ -160,7 +160,9 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
         else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
         part_vt louv = part;
         int coarse_vtx_count = 0;
-        part_vt coarse_map = hec_t::coarsen_HEC(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
+        part_vt coarse_map;
+        if(levels.size() == 1) coarse_map = hec_t::coarsen_HEC<true>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
+        else coarse_map = hec_t::coarsen_HEC<false>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
         parts.push_back(coarse_map);
         if(coarse_vtx_count < c.mtx.numRows()){
             Kokkos::Timer t;
@@ -197,8 +199,8 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             fine_part(x) = coarse_part(fine_part(x));
         });
-        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
-        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+        // if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+        // else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
     }
     return parts[0];
 }
