@@ -92,6 +92,7 @@ public:
     static constexpr ordinal_t NULL_PART = -1;
     static constexpr ordinal_t HASH_RECLAIM = -2;
     static constexpr ordinal_t NO_MOVE = -3;
+    static constexpr ordinal_t NEW_PART = -4;
     static constexpr ordinal_t MID_CUTOFF = 32;
     static constexpr ordinal_t LARGE_CUTOFF = 128;
 
@@ -140,22 +141,23 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
 	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		labels(i) = used(labels(i));
 	});
-    wgt_view_t total_deg("new total degree", t_labels);
-    wgt_view_t old_total_deg = rfd.total_deg;
+    wgt_view_t swap_total_deg = Kokkos::subview(mem.p_mem.pvals, std::make_pair((ordinal_t)0, initial_count));
+    wgt_view_t total_deg = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, initial_count));
+    Kokkos::deep_copy(exec_space(), swap_total_deg, 0);
     Kokkos::parallel_for("relabel degrees", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i){
-		if(old_total_deg(i) > 0){
+		if(total_deg(i) > 0){
             ordinal_t relabeled = used(i);
-            total_deg(relabeled) = old_total_deg(i);
+            swap_total_deg(relabeled) = total_deg(i);
         }
 	});
-    rfd.total_deg = total_deg;
+    Kokkos::deep_copy(exec_space(), total_deg, swap_total_deg);
     rfd.label_count = t_labels;
 }
 
 //determines which vertices (if any) should be moved to another part to improve objective
 //8 kernels, 2 device-host syncs
 template <bool uniform, bool constrained>
-vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, const refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
+vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
     const matrix_t& g = prob.g;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -186,6 +188,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
         float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
         // b_conn must be at least this value to pass filter
         float b_conn = p_conn - filter_ratio*(p_conn);
+        if(p_conn < 0) b_conn = 0;
         edge_offset_t start = c_graph.graph.row_map(i);
         edge_offset_t end = c_graph.graph.row_map(i+1);
         //finds potential destination as most connected part excluding p
@@ -205,6 +208,9 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
         if(best != NO_MOVE){
             // vertices must pass this filter in order to be considered further
             gain = b_conn - p_conn;
+        } else if(p_conn < 0){
+            gain = -p_conn;
+            best = NEW_PART;
         }
         save_gains(i) = gain;
         //a vertex is not considered further if best == p
@@ -225,6 +231,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
             float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
             // j_conn must be at least this value to pass filter
             float maxl = p_conn - filter_ratio*(p_conn);
+            if(p_conn < 0) maxl = 0;
             ordinal_t argmax = NO_MOVE;
             //finds potential destination as most connected part excluding p
             for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
@@ -246,8 +253,13 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
             t.team_reduce(Kokkos::Max<float, mem_space>(maxg), maxl);
             if(maxg == OBJ_MIN){
                 if(t.team_rank() == 0){
-                    dest_part(i) = NO_MOVE;
-                    save_gains(i) = OBJ_MIN;
+                    if(p_conn >= 0){
+                        dest_part(i) = NO_MOVE;
+                        save_gains(i) = OBJ_MIN;
+                    } else {
+                        dest_part(i) = NEW_PART;
+                        save_gains(i) = -p_conn;
+                    }
                 }
                 return;
             }
@@ -319,7 +331,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
                 else wgt = g.values(j);
                 float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
                 update -= (vpart == p) ? q : 0;
-                update += (vpart == best) ? q : 0;
+                update += (vpart == best && best != NEW_PART) ? q : 0;
                 vpart = part(v);
                 update += (vpart == p) ? q : 0;
                 update -= (vpart == best) ? q : 0;
@@ -351,7 +363,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
                 else wgt = g.values(j);
                 float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
                 change -= (vpart == p) ? q : 0;
-                change += (vpart == best) ? q : 0;
+                change += (vpart == best && best != NEW_PART) ? q : 0;
                 vpart = part(v);
                 change += (vpart == p) ? q : 0;
                 change -= (vpart == best) ? q : 0;
@@ -376,6 +388,48 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
     exec_space().fence();
     num_pos = mem.s_mem.scan_host();
     pos_moves = Kokkos::subview(swaps2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
+
+    // find viable cluster labels for new parts    
+    ordinal_t new_parts = 0;
+    Kokkos::parallel_scan("get new part moves", policy_t(0, num_pos), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
+        ordinal_t i = pos_moves(x);
+        if(dest_part(i) == NEW_PART){
+            if(final){
+                vtx1(update) = i;
+            }
+            update++;
+        }
+    }, new_parts);
+    if(new_parts > 0){
+        // std::cout << "Making " << new_parts << " new parts" << std::endl;
+        ordinal_t avail = 0;
+        Kokkos::parallel_scan("find available labels", policy_t(0, rfd.label_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+            // FIX THIS FOR ZERO DEG CLUSTERS
+            if(total_deg(i) == 0){
+                if(final){
+                    if(update < new_parts){
+                        ordinal_t x = vtx1(update);
+                        dest_part(x) = i;
+                    }
+                }
+                update++;
+            }
+        }, avail);
+        if(avail < new_parts){
+            ordinal_t needed = new_parts - avail;
+            // std::cout << "Creating " << needed << " new labels" << std::endl;
+            ordinal_t curr_labels = rfd.label_count;
+            rfd.label_count += needed;
+            Kokkos::parallel_for("set additional labels", policy_t(avail, new_parts), KOKKOS_LAMBDA(const ordinal_t x){
+                ordinal_t i = vtx1(x);
+                dest_part(i) = (x - avail) + curr_labels;
+            });
+            wgt_view_t td_subview = Kokkos::subview(total_deg, std::make_pair(curr_labels, rfd.label_count));
+            // set new labels to have zero degree
+            Kokkos::deep_copy(exec_space(), td_subview, 0);
+        }
+    }
+
     return pos_moves;
 }
 
@@ -777,7 +831,7 @@ void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t
         Kokkos::atomic_add(&total_deg(best), wdeg(i));
     });
     //change part assignments and update part sizes
-    if(!cdata.init || total_moves >= prob.g.numRows() * 0.04){
+    if(!cdata.init || total_moves >= prob.g.numRows() * 0.03){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
@@ -942,7 +996,7 @@ cdata_t truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool t
     Kokkos::parallel_for("comp conn row size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(!top) degree *= 1.2;
-        if(degree > label_count) degree = label_count;
+        if(degree > 2*label_count) degree = 2*label_count;
         cdata.conn_offsets(i) = degree;
         cdata.conn_table_sizes(i) = degree;
     });
@@ -1008,12 +1062,17 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
     prob.g = g;
     prob.wdeg = wdeg;
     prob.use_team = (g.nnz() / g.numRows() >= 8);
+    // best_state.label_count = g.numRows();
     refine_data curr_state(best_state);
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(prob, part, cdata, mem);
+        // need to store this data
+        // because this is only otherwise stored if the partition improves
+        // which it might not, even though leidenR can still shrink the graph
+        clone_pval(mem, g.numRows());
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;

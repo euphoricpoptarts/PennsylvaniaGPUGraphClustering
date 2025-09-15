@@ -228,8 +228,9 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             clt next_clt;
             if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, part, rfd.label_count, mem);
             else next_clt = contracter.build_coarse_graph<false>(c, part, rfd.label_count, mem);
+            wgt_view_t td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
             next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
-            Kokkos::deep_copy(next_clt.wdeg, rfd.total_deg);
+            Kokkos::deep_copy(next_clt.wdeg, td_rfd);
             levels.push_back(next_clt);
 
             if(constrained) {

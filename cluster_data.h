@@ -55,7 +55,9 @@ struct cluster_data {
     }
 
     void copy(const cluster_data& rhs){
-        Kokkos::deep_copy(exec_space(), total_deg, rhs.total_deg);
+        wgt_vt td_lhs = Kokkos::subview(total_deg, std::make_pair((ordinal_t)0, rhs.label_count));
+        wgt_vt td_rhs = Kokkos::subview(rhs.total_deg, std::make_pair((ordinal_t)0, rhs.label_count));
+        Kokkos::deep_copy(exec_space(), td_lhs, td_rhs);
         g_deg = rhs.g_deg;
         cut = rhs.cut;
         v_total = rhs.v_total;
