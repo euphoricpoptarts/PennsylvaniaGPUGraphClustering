@@ -183,9 +183,11 @@ public:
         });
     }
 
+    // reassigns cluster labels into a contiguous range beginning from 0
     static ordinal_t contigitize_clusters(part_vt vcmap, const ordinal_t n) {
         ordinal_t nc = 0;
         Kokkos::parallel_scan("assign contiguous id", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
+            // every cluster with label "u" must contain vertex "u"
             if(vcmap(u) == u){
                 if(final){
                     vcmap(u) = update;
@@ -207,7 +209,7 @@ public:
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
     static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
 
-        // compute connected components on the graph induced by hn
+        // compute connected components on the forest induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
         Kokkos::parallel_for("connected components part 1", policy_t(0, n), KOKKOS_LAMBDA(ordinal_t i) {
             ordinal_t now = i;
