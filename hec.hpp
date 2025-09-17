@@ -49,7 +49,7 @@
 namespace jet_community {
 
 template<class crsMat, typename part_t>
-class coarsen_heuristics {
+class leidenR {
 public:
     // define internal types
     using matrix_t = crsMat;
@@ -121,8 +121,23 @@ public:
             update += val;
         });
         float gamma = rfd.get_penalty_modifier();
-        Kokkos::parallel_for("compute inner_conn", team_policy_t(n, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
-            ordinal_t i = thread.league_rank();
+        vtx_vt order1 = mem.p_mem.order1;
+        ordinal_t big_begin = mem.p_mem.offset_large;
+        vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
+        vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, n));
+        Kokkos::parallel_for("compute inner_conn", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x) {
+            ordinal_t i = small_vtx(x);
+            edge_offset_t end = g.graph.row_map(i + 1);
+            edge_offset_t start = g.graph.row_map(i);
+            scalar_t result = 0;
+            for(edge_offset_t idx = start; idx < end; idx++) {
+                ordinal_t v = g.graph.entries(idx);
+                if(vcmap(i) == vcmap(v) && order(v) < order(i)) result += g.values(idx);
+            }
+            inner_conn(i) = result;
+        });
+        Kokkos::parallel_for("compute inner_conn", team_policy_t(n - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
+            ordinal_t i = large_vtx(thread.league_rank());
             edge_offset_t end = g.graph.row_map(i + 1);
             edge_offset_t start = g.graph.row_map(i);
             scalar_t result = 0;
@@ -257,7 +272,7 @@ public:
     }
 
     template <bool uniform>
-    static part_vt coarsen_HEC(const matrix_t& g,
+    static part_vt coarsen_leidenR(const matrix_t& g,
         const wgt_vt& wdeg,
         const part_vt& constraint,
         mem_t& mem,
@@ -364,6 +379,14 @@ public:
             hasher_t hash;
             ordinal_t o = hash(i + seed);
             order(i) = Kokkos::abs(o % split);
+        });
+        Kokkos::parallel_for("unselect equal order edges", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            ordinal_t h = hn(i);
+            // if two vertices have the same ordering and one points to the other
+            // just unselect that edge
+            // sidenote: if two vertices have the same ordering but neither points to the other
+            // than the sort which comes later will be the tie-breaker
+            if(order(i) == order(h)) hn(i) = i;
         });
         find_trees(vcmap, n, hn, order);
         ensure_gamma_connectivity(g, vcmap, constraint, order, n, wdeg, rfd.total_deg, mem, rfd);

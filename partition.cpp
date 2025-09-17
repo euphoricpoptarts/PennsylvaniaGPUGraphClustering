@@ -56,7 +56,7 @@ using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
 using clt = contracter_t::coarse_level_triple;
 using mem_t = memory_store<matrix_t>;
-using hec_t = coarsen_heuristics<matrix_t, part_t>;
+using lr_t = leidenR<matrix_t, part_t>;
 
 void connected_comps(matrix_t g, part_vt part_d){
     ordinal_t n = g.numRows();
@@ -167,8 +167,8 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
         part_vt louv = part;
         int coarse_vtx_count = 0;
         part_vt coarse_map;
-        if(levels.size() == 1) coarse_map = hec_t::coarsen_HEC<true>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
-        else coarse_map = hec_t::coarsen_HEC<false>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
+        if(levels.size() == 1) coarse_map = lr_t::coarsen_leidenR<true>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
+        else coarse_map = lr_t::coarsen_leidenR<false>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
         parts.push_back(coarse_map);
         if(coarse_vtx_count < c.mtx.numRows()){
             Kokkos::Timer t;
