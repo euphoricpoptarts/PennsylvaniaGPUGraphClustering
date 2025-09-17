@@ -44,7 +44,7 @@
 #include "cluster_data.h"
 #include "part_stat.hpp"
 #include "ExperimentLoggerUtil.hpp"
-#include "hec.hpp"
+#include "leidenR.hpp"
 #include <limits>
 #include <queue>
 
