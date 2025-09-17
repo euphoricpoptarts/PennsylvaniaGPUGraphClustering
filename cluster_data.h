@@ -1,5 +1,6 @@
 #pragma once
 #include <Kokkos_Core.hpp>
+#include <iostream>
 
 template <typename matrix_t>
 struct cluster_data {
@@ -91,5 +92,12 @@ struct cluster_data {
         m += 1.0 - static_cast<double>(cut) * inv_gdeg;
         // std::cout << "Objective " << m << std::endl;
         obj = m;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const cluster_data& cd) {
+        os << "Cut: " << cd.cut / 2;
+        os << " Modularity: " << cd.obj;
+        os << " Labels: " << cd.label_count;
+        return os;
     }
 };

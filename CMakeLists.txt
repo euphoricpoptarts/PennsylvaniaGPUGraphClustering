@@ -9,7 +9,10 @@ find_package(KokkosKernels REQUIRED)
 add_compile_options(-O3 -Wall -Wextra -Wshadow)
 #add_compile_options(-g -DDEBUG)
 
-add_executable(lp partition.cpp)
+add_executable(louvain partition.cpp)
+add_executable(leiden partition.cpp)
+#add_executable(classify classifier_acc.cpp)
 
-target_compile_definitions(lp PUBLIC HASHMAP_P)
-target_link_libraries(lp Kokkos::kokkos Kokkos::kokkoskernels)
+target_compile_definitions(leiden PUBLIC LEIDEN)
+target_link_libraries(louvain Kokkos::kokkos Kokkos::kokkoskernels)
+target_link_libraries(leiden Kokkos::kokkos Kokkos::kokkoskernels)
