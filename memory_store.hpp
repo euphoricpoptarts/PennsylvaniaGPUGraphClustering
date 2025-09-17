@@ -2,6 +2,7 @@
 #include <type_traits>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
+#include "cluster_data.h"
 
 // this struct contains almost all auxiliary memory used by the algorithm
 // this allows for efficient reuse of memory
@@ -82,8 +83,10 @@ struct memory_store {
 
     persistent p_mem;
     scratch s_mem;
+    cluster_data<matrix_t> spare_cluster_data;
 
-    memory_store(const matrix_t largest) :
+    memory_store(const matrix_t largest, cluster_data<matrix_t> clone_target) :
         p_mem(largest), 
-        s_mem(largest.numRows()) {}
+        s_mem(largest.numRows()),
+        spare_cluster_data(clone_target) {}
 };

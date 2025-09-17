@@ -156,8 +156,14 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
     if(improve) Kokkos::deep_copy(part, input);
     while(true) {
         clt c = levels[levels.size() - 1];
+        // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
+        double old_obj = rfd.obj;
         if(levels.size() == 1) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
         else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
+        if(old_obj == rfd.obj){
+            if(levels.size() == 1) refiner.ensure_improvement_outer<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
+            else refiner.ensure_improvement_outer<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
+        }
         part_vt louv = part;
         int coarse_vtx_count = 0;
         part_vt coarse_map;
@@ -276,7 +282,7 @@ part_vt partition(matrix_t g,
                     double& mod,
                     ExperimentLoggerUtil<value_t>& experiment) {
     rfd_t rfd(g, vweights, 1.0, true);
-    mem_t mem(g);
+    mem_t mem(g, rfd);
     clt c;
     c.mtx = g;
     c.wdeg = vweights;

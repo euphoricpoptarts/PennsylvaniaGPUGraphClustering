@@ -51,7 +51,7 @@ struct cluster_data {
         Kokkos::deep_copy(total_deg, wdeg);
         cut = sum(g.values);
         label_count = g.numRows();
-        obj = objective();
+        update_objective();
     }
 
     void copy(const cluster_data& rhs){
@@ -77,7 +77,7 @@ struct cluster_data {
         return modifier;
     }
 
-    double objective() const {
+    void update_objective() {
         double m = 0;
         // avoid implicit capture of "this"
         wgt_vt total = total_deg;
@@ -90,6 +90,6 @@ struct cluster_data {
         m = m*penalty_factor;
         m += 1.0 - static_cast<double>(cut) * inv_gdeg;
         // std::cout << "Objective " << m << std::endl;
-        return m;
+        obj = m;
     }
 };
