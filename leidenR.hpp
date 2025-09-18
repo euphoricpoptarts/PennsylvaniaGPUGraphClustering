@@ -75,7 +75,7 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr ordinal_t split = 1000000000;
 
-    static void ensure_gamma_connectivity(const matrix_t g, part_vt vcmap, part_vt constraint, const vtx_vt order, const ordinal_t n, const wgt_vt wdeg, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
+    static void ensure_gamma_connectivity(const matrix_t g, part_vt vcmap, part_vt constraint, vtx_vt order, const ordinal_t n, const wgt_vt wdeg, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
         vtx_vt row_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
         vtx_vt store_atom = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -110,7 +110,7 @@ public:
         wgt_vt total_size = mem.p_mem.pvals;
         wgt_vt inner_conn = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
         wgt_vt pvals = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
-        wgt_vt outer_conn("outer conn", n);
+        wgt_vt outer_conn = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<ordinal_t>(0), n));
         // gets the total size of each cluster during construction by order of ids view
         Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
             ordinal_t i = ids(x);
@@ -148,7 +148,8 @@ public:
             inner_conn(i) = result;
         });
 
-        vtx_vt breakers("breakers", n);
+        // alias and reuse
+        vtx_vt breakers = order;
         Kokkos::deep_copy(exec_space(), breakers, n);
 
         // break clusters if vertex i not well connect to cluster
@@ -284,9 +285,8 @@ public:
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
         part_vt vcmap("vcmap", n);
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
-        vtx_vt order("order", n);
 
-        vtx_vt well_conn("well connected", n);
+        vtx_vt well_conn = Kokkos::subview(mem.p_mem.cluster_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
         const wgt_vt pvals = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
         const wgt_vt total_deg = rfd.total_deg;
         Kokkos::parallel_for("determine well connected", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
@@ -372,6 +372,9 @@ public:
                 });
             });
         }
+
+        // alias and reuse
+        vtx_vt order = well_conn;
         ordinal_t seed = rd();
         // this random ordering determines the spanning trees
         // and the insertion order into each cluster
