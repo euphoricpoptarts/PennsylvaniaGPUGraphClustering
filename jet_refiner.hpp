@@ -290,7 +290,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
     if(!truncated){
         Kokkos::parallel_for("select destination part (large tables)", team_policy_t(n - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
             ordinal_t i = large_tables(t.league_rank());
-            if(dest_part(i) != NULL_PART){
+            if(dest_part(i) == NO_MOVE){
                 return;
             }
             ordinal_t team_size = t.team_size();
