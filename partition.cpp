@@ -254,7 +254,7 @@ part_vt partition(matrix_t g,
     c.wdeg = vweights;
     clt active_clt = c;
     Kokkos::fence();
-    Kokkos::Timer t;
+    Kokkos::Timer iteration;
     std::cout << std::setprecision(6);
     part_vt constraint;
 #ifdef LEIDEN
@@ -262,9 +262,9 @@ part_vt partition(matrix_t g,
 #else
     part_vt part = louvain_part<false>(mem, c, rfd, experiment, constraint);
 #endif
-    double time = t.seconds();
+    double time = iteration.seconds();
     std::cout << "Cluster time: " << time << " " << rfd << std::endl;
-    t.reset();
+    iteration.reset();
     for(int i = 0; i < extra_iterations; i++){
         constraint = part;
 #ifdef LEIDEN
@@ -272,13 +272,12 @@ part_vt partition(matrix_t g,
 #else
         part = louvain_part<true>(mem, c, rfd, experiment, constraint);
 #endif
-        time = t.seconds();
+        time = iteration.seconds();
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
-        t.reset();
+        iteration.reset();
     }
     std::cout << std::endl;
     experiment.setModularity(rfd.obj);
-    experiment.addMeasurement(Measurement::Total, time);
     experiment.setEdgeCut(rfd.cut / 2);
     obj = rfd.obj;
     return part;
@@ -327,7 +326,10 @@ int main(int argc, char **argv) {
         for(int i = 0; i < iters; i++){
             ExperimentLoggerUtil<value_t> experiment;
             double mod;
+            Kokkos::Timer total_time;
             part_vt part = partition(g, vweights, mod, extra_iterations, experiment);
+            std::cout << "Total time: " << total_time.seconds() << std::endl;
+            experiment.addMeasurement(Measurement::Total, total_time.seconds());
             if(mod > best_mod){
                 best_mod = mod;
                 best_part = part;
