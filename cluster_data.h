@@ -23,7 +23,7 @@ struct cluster_data {
     scalar_t last_pval = 0;
 
     // objective scaling
-    double penalty_scale = 2.0;
+    double penalty_scale = 1.0;
 
     static scalar_t sum(const wgt_vt wdeg){
         scalar_t result = 0;
@@ -73,23 +73,23 @@ struct cluster_data {
     }
 
     double get_penalty_modifier() const {
-        double inv_gdeg = 1.0 / static_cast<float>(g_deg);
+        double inv_gdeg = 1.0 / static_cast<double>(g_deg);
         double modifier = penalty_scale * inv_gdeg;
         return modifier;
     }
 
     void update_objective() {
-        double m = 0;
         // avoid implicit capture of "this"
         wgt_vt total = total_deg;
-        Kokkos::parallel_reduce("sum of squares", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, double& update){
-            double total_ratio = static_cast<double>(total(l));
-            update -= total_ratio*total_ratio;
-        }, m);
+        long long square_sum = 0;
+        Kokkos::parallel_reduce("sum of squares", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, long long& update){
+            long long c_size = total(l);
+            update += c_size*c_size;
+        }, square_sum);
         double inv_gdeg = 1.0 / static_cast<double>(g_deg);
         double penalty_factor = penalty_scale*inv_gdeg*inv_gdeg;
-        m = m*penalty_factor;
-        m += 1.0 - static_cast<double>(cut) * inv_gdeg;
+        double m = 1.0 - static_cast<double>(cut) * inv_gdeg;
+        m -= static_cast<double>(square_sum)*penalty_factor;
         // std::cout << "Objective " << m << std::endl;
         obj = m;
     }

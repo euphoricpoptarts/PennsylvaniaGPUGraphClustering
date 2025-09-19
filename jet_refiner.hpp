@@ -218,7 +218,8 @@ vtx_vt ensure_improvement_inner(const problem& prob, const vtx_vt moves, const v
     }, argmax_reducer_t(result));
     vtx_vt output_moves;
     ordinal_t truncate = 0;
-    if(result.loc < num_moves){
+    // val may be less than zero due to catastrophic cancellation and floating-point roundoff errors
+    if(result.loc < num_moves && result.val > 0){
         truncate = result.loc + 1;
     }
     output_moves = Kokkos::subview(moves, std::make_pair((ordinal_t)0, truncate));
