@@ -218,7 +218,8 @@ vtx_vt ensure_improvement_inner(const problem& prob, const vtx_vt moves, const v
     }, argmax_reducer_t(result));
     vtx_vt output_moves;
     ordinal_t truncate = 0;
-    // val may be less than zero due to catastrophic cancellation and floating-point roundoff errors
+    // val may be less than zero, but appear as zero or even positive, due to catastrophic cancellation and floating-point roundoff errors
+    // this problem can't be entirely avoided with fixed precision floating point numbers
     if(result.loc < num_moves && result.val > 0){
         truncate = result.loc + 1;
     }
