@@ -1,6 +1,7 @@
 #pragma once
 #include <Kokkos_Core.hpp>
 #include <iostream>
+#include <cstdint>
 
 template <typename matrix_t>
 struct cluster_data {
@@ -81,9 +82,9 @@ struct cluster_data {
     void update_objective() {
         // avoid implicit capture of "this"
         wgt_vt total = total_deg;
-        long long square_sum = 0;
-        Kokkos::parallel_reduce("sum of squares", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, long long& update){
-            long long c_size = total(l);
+        int64_t square_sum = 0;
+        Kokkos::parallel_reduce("sum of squares", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, int64_t& update){
+            int64_t c_size = total(l);
             update += c_size*c_size;
         }, square_sum);
         double inv_gdeg = 1.0 / static_cast<double>(g_deg);
