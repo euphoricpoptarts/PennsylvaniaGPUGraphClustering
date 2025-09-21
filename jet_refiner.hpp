@@ -479,7 +479,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
                     if(update < new_parts){
                         ordinal_t x = vtx1(update);
                         dest_part(x) = i;
-                        if constexpr(constrained) constraint(i) = constraint(part(x));
+                        if(constrained) constraint(i) = constraint(part(x));
                     }
                 }
                 update++;
@@ -495,7 +495,7 @@ vtx_vt jet_lp(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, 
                 ordinal_t i = vtx1(x);
                 ordinal_t dest = (x - avail) + curr_labels;
                 dest_part(i) = dest;
-                if constexpr(constrained) constraint(dest) = constraint(part(i));
+                if(constrained) constraint(dest) = constraint(part(i));
             });
             wgt_view_t td_subview = Kokkos::subview(total_deg, std::make_pair(curr_labels, rfd.label_count));
             // set new labels to have zero degree
