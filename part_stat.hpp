@@ -157,28 +157,28 @@ static void relabel(part_vt labels){
 }
 
 static double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count, scalar_t g_degree){
-    wgt_view_t internal("internal degree", label_count);
     wgt_view_t total("total degree", label_count);
     ordinal_t n = g.numRows();
-    Kokkos::parallel_for("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
-		scalar_t id = 0;
+    scalar_t uncut = 0;
+    Kokkos::parallel_reduce("count degrees", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
         scalar_t td = 0;
         ordinal_t l = labels(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
             td += g.values(j);
             ordinal_t v = g.graph.entries(j);
-            if(l == labels(v)) id += g.values(j);
+            if(l == labels(v)) update += g.values(j);
         }
-        Kokkos::atomic_add(&internal(l), id);
         Kokkos::atomic_add(&total(l), td);
-	});
-    double m = 0;
-    Kokkos::parallel_reduce("sum modularity", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, double& update){
-        double internal_ratio = static_cast<double>(internal(l)) / static_cast<double>(g_degree);
-        double total_ratio = static_cast<double>(total(l)) / static_cast<double>(g_degree);
-        double l_mod = internal_ratio - penalty*(total_ratio*total_ratio);
-        update += l_mod;
-    }, m);
+	}, uncut);
+    int64_t square_sum = 0;
+    Kokkos::parallel_reduce("sum modularity", policy_t(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, int64_t& update){
+        int64_t square = total(l);
+        square = square*square;
+        update += square;
+    }, square_sum);
+    double inv_gdeg = 1.0 / static_cast<double>(g_degree);
+    double pen = penalty*square_sum*inv_gdeg;
+    double m = (uncut - pen)*inv_gdeg;
     return m;
 }
 

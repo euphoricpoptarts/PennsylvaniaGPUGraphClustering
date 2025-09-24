@@ -41,18 +41,17 @@
 #include "io.hpp"
 #include <limits>
 
-using namespace jet_partitioner;
+using namespace jet_community;
 
 int main(int argc, char **argv) {
 
-    if (argc < 4) {
+    if (argc < 3) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <part_file> <k>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <part_file>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
     char *part_file = argv[2];
-    part_t k = atoi(argv[3]);
 
     Kokkos::initialize();
     //must scope kokkos-related data
@@ -66,46 +65,8 @@ int main(int argc, char **argv) {
         Kokkos::deep_copy(vweights, 1);
 
         part_vt part = load_part(g.numRows(), part_file);
-        using stat = part_stat<matrix_t, part_t>; 
-        using h_t = stat::gain_2vt;
-        value_t cut = stat::get_total_cut(g, part);
-        h_t heatmap_d = stat::cut_heatmap(g, part, k);
-        h_t::HostMirror heatmap = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), heatmap_d);
-        std::vector<std::vector<gain_t>> hvec(k, std::vector<gain_t>(k, 0));
-        gain_t max = 0;
-        for(part_t i = 0; i < k; i++){
-            gain_t row_total = 0;
-            for(part_t j = 0; j < k; j++){
-                hvec[i][j] = heatmap(i, j);
-                row_total += heatmap(i, j);
-            }
-            max = max > row_total ? max : row_total;
-        }
-        std::cout << "Max part cut: " << max << std::endl;
-        cut = cut / 2;
-        std::cout << "Cutsize: " << cut << std::endl;
-        value_t comm_size = stat::comm_size(g, part, k);
-        std::cout << "Comm size: " << comm_size << std::endl;
-        gain_vt part_sizes = stat::get_part_sizes(g, vweights, part, k);
-        typename gain_vt::HostMirror ps_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), part_sizes);
-        gain_t largest = 0;
-        gain_t total = 0;
-        gain_t smallest = g.numRows();
-        for(int p = 0; p < k; p++){
-            total += ps_host(p);
-            if(ps_host(p) > largest){
-                largest = ps_host(p);
-            }
-            if(ps_host(p) < smallest){
-                smallest = ps_host(p);
-            }
-        }
-        double opt = stat::optimal_size(total, k);
-        double max_imb = static_cast<double>(largest) / opt;
-        double min_imb = static_cast<double>(smallest) / opt;
-        std::cout << std::setprecision(5);
-        std::cout << "Largest: " << max_imb << std::endl;
-        std::cout << "Smallest: " << min_imb << std::endl;
+        using stat = part_stat<matrix_t, ordinal_t>;
+        std::cout << "Modularity: " << std::setprecision(9) << stat::modularity(g, part, g.numRows(), g.nnz()) << std::endl;
     }
     Kokkos::finalize();
 

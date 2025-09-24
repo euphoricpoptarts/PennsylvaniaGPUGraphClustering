@@ -11,8 +11,10 @@ add_compile_options(-O3 -Wall -Wextra -Wshadow)
 
 add_executable(louvain partition.cpp)
 add_executable(leiden partition.cpp)
+add_executable(calc_mod part_eval.cpp)
 #add_executable(classify classifier_acc.cpp)
 
 target_compile_definitions(leiden PUBLIC LEIDEN)
 target_link_libraries(louvain Kokkos::kokkos Kokkos::kokkoskernels)
 target_link_libraries(leiden Kokkos::kokkos Kokkos::kokkoskernels)
+target_link_libraries(calc_mod Kokkos::kokkos Kokkos::kokkoskernels)
