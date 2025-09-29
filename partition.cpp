@@ -161,7 +161,12 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
     experiment.addMeasurement(Measurement::Contract, aggregate);
     // std::cout << rfd.obj << std::endl;
     // std::cout << rfd.label_count << std::endl;
-    
+    int64_t t_nnz = 0;
+    for(const clt& level : levels){
+        t_nnz += level.mtx.nnz();
+    }
+    experiment.setTotalNnz(t_nnz);
+    experiment.setLevelCount(levels.size());
     for(int i = levels.size() - 2; i >= 0; i--){
         clt c = levels[i];
         part_vt coarse_part = parts[i + 1];
@@ -215,6 +220,13 @@ part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value
             break;
         }
     }
+    
+    int64_t t_nnz = 0;
+    for(const clt& level : levels){
+        t_nnz += level.mtx.nnz();
+    }
+    experiment.setTotalNnz(t_nnz);
+    experiment.setLevelCount(levels.size());
 
     // std::cout << "Post coarsen obj: " << rfd.obj << std::endl;
     if(levels.size() > 1){

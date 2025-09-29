@@ -96,6 +96,8 @@ private:
 	std::vector<CoarseLevel> coarseLevels;
     scalar_t edge_cut = 0;
     double modularity = -1.0;
+	int64_t t_nnz = 0;
+	int level_count = 0;
 
 public:
 	ExperimentLoggerUtil() :
@@ -123,6 +125,14 @@ public:
 		return measurements[static_cast<int>(m)];
 	}
 
+	void setTotalNnz(int64_t _t_nnz){
+		t_nnz = _t_nnz;
+	}
+
+	void setLevelCount(int _level_count){
+		level_count = _level_count;
+	}
+
 	void log(char* filename, bool first, bool last) {
 		std::ofstream f;
 		f.open(filename, std::ios::app);
@@ -134,6 +144,8 @@ public:
 			f << "{";
             f << "\"edge-cut\":" << std::fixed << edge_cut << ",";
             f << "\"modularity\":" << modularity << ",";
+            f << "\"total-nnz\":" << t_nnz << ",";
+            f << "\"level-count\":" << level_count << ",";
 			for (int i = 0; i < static_cast<int>(Measurement::END); i++) {
 				f << "\"" << measurementNames[i] << "-duration-seconds\":" << measurements[i] << ",";
 			}
