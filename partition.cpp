@@ -174,8 +174,10 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
         Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
             fine_part(x) = coarse_part(fine_part(x));
         });
-        // if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
-        // else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+#ifdef LEIDEN_PLUS
+        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
+#endif
     }
     return parts[0];
 }
