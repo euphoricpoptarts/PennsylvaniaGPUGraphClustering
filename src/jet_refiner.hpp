@@ -131,25 +131,23 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
 		used(labels(i)) = 1;
 	});
     ordinal_t t_labels = 0;
-	Kokkos::parallel_scan("count labels", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+    wgt_view_t swap_total_deg = Kokkos::subview(mem.p_mem.pvals, std::make_pair((ordinal_t)0, initial_count));
+    wgt_view_t total_deg = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, initial_count));
+    Kokkos::parallel_scan("count labels and compact total_deg", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
 		if(used(i) > 0){
-			if(final) used(i) = update;
+			if(final){
+                used(i) = update;
+                swap_total_deg(update) = total_deg(i);
+            }
 			update++;
 		}
 	}, t_labels);
+    swap_total_deg = Kokkos::subview(mem.p_mem.pvals, std::make_pair((ordinal_t)0, t_labels));
+    total_deg = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, t_labels));
+    Kokkos::deep_copy(exec_space(), total_deg, swap_total_deg);
 	Kokkos::parallel_for("relabel", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
 		labels(i) = used(labels(i));
 	});
-    wgt_view_t swap_total_deg = Kokkos::subview(mem.p_mem.pvals, std::make_pair((ordinal_t)0, initial_count));
-    wgt_view_t total_deg = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, initial_count));
-    Kokkos::deep_copy(exec_space(), swap_total_deg, 0);
-    Kokkos::parallel_for("relabel degrees", policy_t(0, initial_count), KOKKOS_LAMBDA(const ordinal_t i){
-		if(total_deg(i) > 0){
-            ordinal_t relabeled = used(i);
-            swap_total_deg(relabeled) = total_deg(i);
-        }
-	});
-    Kokkos::deep_copy(exec_space(), total_deg, swap_total_deg);
     rfd.label_count = t_labels;
 }
 
