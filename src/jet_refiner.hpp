@@ -1206,8 +1206,9 @@ void ensure_improvement_outer(const matrix_t g, wgt_view_t wdeg, vtx_vt best_par
             c_graph = g;
         }
         moves = jet_lp<uniform, constrained>(prob, c_graph, part, curr_state, mem, 0, constraint);
-        if(moves.extent(0) == 0) return;
+        if(moves.extent(0) == 0) break;
         moves = ensure_improvement_inner(prob, moves, part, curr_state, mem);
+        if(moves.extent(0) == 0) break;
         perform_moves<uniform>(prob, part, moves, cdata, mem, curr_state);
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.obj > best_state.obj){

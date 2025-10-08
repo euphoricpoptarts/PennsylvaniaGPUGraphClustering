@@ -49,8 +49,8 @@ struct cluster_data {
     }
 
     void update(const matrix_t g, const wgt_vt wdeg) {
-        total_deg = wgt_vt("total deg", g.numRows());
-        Kokkos::deep_copy(total_deg, wdeg);
+        wgt_vt td_lhs = Kokkos::subview(total_deg, std::make_pair((ordinal_t)0, g.numRows()));
+        Kokkos::deep_copy(td_lhs, wdeg);
         cut = sum(g.values);
         label_count = g.numRows();
         update_objective();
