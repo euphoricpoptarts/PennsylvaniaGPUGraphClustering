@@ -2,15 +2,8 @@
 
 Depends on Kokkos (https://github.com/kokkos/kokkos), KokkosKernels (https://github.com/kokkos/kokkos-kernels), and the Cuda Toolkit (version >12.0).
 
-This is a parallel undirected graph clustering package that implements novel GPU-first formulations of the Louvain and Leiden clustering algorithms.
-
-## Reasons to Use These Programs
-
-### Fastest GPU Clustering Algorithms
-![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
-
-### Quality Competitive with Memetic Algorithms
-![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
+This is a parallel undirected graph clustering package that implements novel GPU-first formulations of the Louvain and Leiden clustering algorithms.  
+Our pLeiden and pLeiden+ implemenations are the first to provide the Leiden algorithm's six original guarantees in a parallel setting.
 
 ## Usage
 
@@ -37,11 +30,31 @@ Each program currently only optimizes for modularity.
 `./build/app/calc_mod <required graph file> <required clustering file>`
 
 ### Library
-There is currently no library available to programmatically invoke our clustering methods.  
-If you are interested in a c++ library or a python wrapper to these methods, please open an issue to let us know.
+There is currently no library available to programmatically invoke our clustering methods.
 
 ### Input Format
 We do not yet support vertex weights within metis graph files.
+
+## Comparison versus State of the Art Clustering Parallel Algorithms
+The below images compare our programs with the following state-of-the-art competitors:  
+v-Louvain: https://github.com/puzzlef/louvain-communities-cuda  
+GALA: https://github.com/LinXi-lx/GALA  
+GVE-Louvain: https://github.com/puzzlef/louvain-communities-openmp  
+GVE-Leiden: https://github.com/puzzlef/leiden-communities-openmp  
+Networkit Louvain  
+Networkit Leiden  
+Cugraph Louvain  
+Cugraph Leiden
+
+GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
+CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
+
+### Runtime Comparison
+![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
+
+### Modularity Comparison
+![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
+Networkit Leiden is off the chart at -0.415.
 
 ## Planned Features
 Support for Matrix Marketplace graph files.  
@@ -51,3 +64,5 @@ Support for user-specified LambdaCC objective function configurations.
 Memetic algorithm with our programs.  
 Python wrapper.  
 C++ library.
+
+If you are interested in these potential features, please open an issue to let us know.
