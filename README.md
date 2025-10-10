@@ -7,10 +7,10 @@ This is a parallel undirected graph clustering package that implements novel GPU
 ## Reasons to Use These Programs
 
 ### Fastest GPU Clustering Algorithms
-![Comparison of Clustering Runtimes](images/runtime_comparison.pdf)
+![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
 
 ### Quality Competitive with Memetic Algorithms
-![Comparison of Clustering Modularity](images/modularity_comparison.pdf)
+![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
 
 ## Usage
 
