@@ -35,7 +35,7 @@ There is currently no library available to programmatically invoke our clusterin
 ### Input Format
 We do not yet support vertex weights within metis graph files.
 
-## Comparison versus State of the Art Clustering Parallel Algorithms
+## Comparison versus State of the Art Parallel Clustering Algorithms
 The below images compare our programs with the following state-of-the-art competitors:  
 v-Louvain: https://github.com/puzzlef/louvain-communities-cuda  
 GALA: https://github.com/LinXi-lx/GALA  
@@ -51,10 +51,12 @@ CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ry
 
 ### Runtime Comparison
 ![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
+pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
 ![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
-Networkit Leiden is off the chart at -0.415.
+Networkit Leiden is off the chart at -0.415.  
+pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ## Planned Features
 Support for Matrix Marketplace graph files.  
