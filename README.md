@@ -4,6 +4,14 @@ Depends on Kokkos (https://github.com/kokkos/kokkos), KokkosKernels (https://git
 
 This is a parallel undirected graph clustering package that implements novel GPU-first formulations of the Louvain and Leiden clustering algorithms.
 
+## Reasons to Use These Programs
+
+### Fastest GPU Clustering Algorithms
+![Comparison of Clustering Runtimes](images/runtime_comparison.pdf)
+
+### Quality Competitive with Memetic Algorithms
+![Comparison of Clustering Modularity](images/modularity_comparison.pdf)
+
 ## Usage
 
 ### Executables
@@ -11,11 +19,11 @@ This is a parallel undirected graph clustering package that implements novel GPU
 #### Clustering Programs
 Each clustering program has 1 required parameter and 3 optional parameters.
 You will invoke each as below:  
-`./app/<program> <required graph file> <optional additional iteration count> <optional trial count> <optional clustering output file>`  
+`./build/app/<program> <required graph file> <optional additional iteration count> <optional trial count> <optional clustering output file>`  
 
 **pLouvain**: Run the Louvain+ algorithm. Choose this one for fast, high-quality clustering.  
-**pLeiden**: Run the Leiden algorithm. Choose this one for intra-cluster connectivity guarantees.  
-**pLeiden+**: Run the Leiden+ algorithm. Choose this one if you intend to use multiple iterations for highest-quality. Intra-cluster connectivity guarantees are delayed until algorithm achieves stability.  
+**pLeiden**: Run the Leiden algorithm. Choose this one for intra-cluster connectivity guarantees, but lower quality than pLouvain or pLeiden+.  
+**pLeiden+**: Run the Leiden+ algorithm. Use this one with multiple iterations for highest-quality. Intra-cluster connectivity guarantees are delayed until algorithm encounters a stable iteration.  
 Each program currently only optimizes for modularity.
 
 ##### Parameters
@@ -26,7 +34,7 @@ Each program currently only optimizes for modularity.
 
 #### Helpers
 **calc_mod**: Takes a graph file and a clustering file as defined above as input. Computes the modularity of the given clustering on the given graph. Invoke as below:  
-`./app/calc_mod <required graph file> <required clustering file>`
+`./build/app/calc_mod <required graph file> <required clustering file>`
 
 ### Library
 There is currently no library available to programmatically invoke our clustering methods.  
@@ -38,3 +46,8 @@ We do not yet support vertex weights within metis graph files.
 ## Planned Features
 Support for Matrix Marketplace graph files.  
 Support for user-specified LambdaCC objective function configurations.
+
+### Possible Features
+Memetic algorithm with our programs.  
+Python wrapper.  
+C++ library.
