@@ -74,6 +74,7 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     std::cout << "Reading " << sz << " bytes from " << fname << std::endl;
     infp.read(s, sz);
     infp.close();
+    std::cout << "Parsing file as metis format" << std::endl;
     //append an endline to end of file in case one doesn't exist
     //needed to prevent parser from overshooting end of buffer
     if(s[sz - 1] != '\n'){

@@ -43,7 +43,6 @@
 #include "contract.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
-#include "part_stat.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "leidenR.hpp"
 #include <limits>
@@ -53,7 +52,6 @@ using namespace jet_community;
 using ref_t = jet_refiner<matrix_t>;
 using vtx_vt = typename ref_t::vtx_vt;
 using rfd_t = cluster_data<matrix_t>;
-using pstat = part_stat<matrix_t, part_t>;
 using contracter_t = contracter<matrix_t>;
 using clt = contracter_t::coarse_level_triple;
 using mem_t = memory_store<matrix_t>;
