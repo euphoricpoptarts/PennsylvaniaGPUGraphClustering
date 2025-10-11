@@ -46,69 +46,6 @@
 
 namespace jet_community {
 
-bool load_config(config_t& c, const char* config_f) {
-
-    std::ifstream f(config_f);
-    if (!f.is_open()) {
-        std::cerr << "FATAL ERROR: Could not open config file " << config_f << std::endl;
-        return false;
-    }
-    std::string lines[4];
-    int reads = 0;
-    // you might think that reading in four lines from a simple config file could be done like:
-    // f >> c.coarsening_alg; 
-    // f >> c.num_parts;
-    // f >> c.num_iter;
-    // f >> c.max_imb_ratio;
-    // but that doesn't work if there are exactly 3 lines instead of 4 in the config file
-    // because if the last line is a float like 3.14, then c.num_iter will contain the 3
-    // and the c.max_imb_ratio will contain the .314
-    // ABSOLUTELY ASININE
-    for(int i = 0; i < 4; i++){
-        if(f >> lines[i]) reads++;
-    }
-    f.close();
-    if(reads != 4){
-        std::cerr << "FATAL ERROR: Config file has less than 4 lines" << std::endl;
-        return false;
-    }
-    c.coarsening_alg = std::stoi(lines[0]);
-    c.num_parts = std::stoi(lines[1]);
-    c.num_iter = std::stoi(lines[2]);
-    c.max_imb_ratio = std::stod(lines[3]);
-    return true;
-}
-
-bool load_binary_graph(matrix_t& g, const char *csr_filename) {
-
-    FILE *infp = fopen(csr_filename, "rb");
-    if (infp == NULL) {
-        printf("Error: Could not open input file %s. Exiting ...\n", csr_filename);
-        return false;
-    }
-    long n, m;
-    long unused_vals[4];
-    if(fread(&n, sizeof(long), 1, infp) == 0) return false;
-    if(fread(&m, sizeof(long), 1, infp) == 0) return false;
-    if(fread(unused_vals, sizeof(long), 4, infp) != 4) return false;
-    edge_view_t row_map("row map", n + 1);
-    edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
-    vtx_view_t entries("entries", m);
-    vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
-    size_t nitems_read = fread(row_map_m.data(), sizeof(edge_offset_t), n+1, infp);
-    if(nitems_read != ((size_t)n+1)) return false;
-    nitems_read = fread(entries_m.data(), sizeof(ordinal_t), m, infp);
-    if(nitems_read != ((size_t) m)) return false;
-    fclose(infp);
-    Kokkos::deep_copy(row_map, row_map_m);
-    Kokkos::deep_copy(entries, entries_m);
-    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), m);
-    Kokkos::deep_copy(values, 1);
-    graph_t g_graph(entries, row_map);
-    g = matrix_t("input graph", n, values, g_graph);
-    return true;
-}
-
 template<typename t>
 t fast_atoi( const char*& str )
 {

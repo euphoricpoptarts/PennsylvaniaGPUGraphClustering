@@ -39,6 +39,7 @@
 #include "jet_refiner.hpp"
 #include "defs.h"
 #include "io.hpp"
+#include "io_mtx.hpp"
 #include "contract.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
@@ -128,6 +129,10 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
             if(levels.size() == 1) refiner.ensure_improvement_outer<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
             else refiner.ensure_improvement_outer<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
         }
+        if(rfd.label_count == c.mtx.numRows()){
+            parts.push_back(part);
+            break;
+        }
         part_vt louv = part;
         int coarse_vtx_count = 0;
         part_vt coarse_map;
@@ -151,11 +156,12 @@ part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_
             levels.push_back(next_clt);
             aggregate += t.seconds();
         } else {
-            break;
+            // avoid creating new graph if leidenR didn't contract any vertices
+            // which may happen with astronomically low probability for any input clustering
+            // or if input clustering is very bad
+            levels.push_back(c);
         }
     }
-
-    parts[parts.size() - 1] = part;
 
     // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
     experiment.addMeasurement(Measurement::Contract, aggregate);
@@ -328,7 +334,7 @@ int main(int argc, char **argv) {
     {
         matrix_t g;
         bool uniform_ew = false;
-        if(!load_metis_graph(g, uniform_ew, filename)) return -1;
+        if(!load_graph(g, uniform_ew, filename)) return -1;
         std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
         wgt_view_t vweights("vertex weights", g.numRows());
         degree_weighting(g, vweights);
@@ -353,7 +359,11 @@ int main(int argc, char **argv) {
             }
         }
 
-        if(part_file != nullptr) write_part(best_part, part_file);
+        std::cout << std::setprecision(9) << "Best modularity found: " << best_mod << std::endl;
+        if(part_file != nullptr){
+            std::cout << "Writing best clustering to " << part_file << std::endl;
+            write_part(best_part, part_file);
+        } 
     }
     Kokkos::finalize();
 
