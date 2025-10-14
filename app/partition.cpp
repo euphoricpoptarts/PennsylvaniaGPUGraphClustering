@@ -36,7 +36,6 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#include "jet_refiner.hpp"
 #include "defs.h"
 #include "io.hpp"
 #include "io_mtx.hpp"
@@ -44,18 +43,15 @@
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
-#include "leidenR.hpp"
-#include <limits>
+#include "clustering_methods.hpp"
 #include <queue>
 
 using namespace jet_community;
-using ref_t = jet_refiner<matrix_t>;
-using vtx_vt = typename ref_t::vtx_vt;
 using rfd_t = cluster_data<matrix_t>;
 using contracter_t = contracter<matrix_t>;
-using clt = contracter_t::coarse_level_triple;
+using clt = typename contracter_t::coarse_level_triple;
 using mem_t = memory_store<matrix_t>;
-using lr_t = leidenR<matrix_t, part_t>;
+using cm_t = clustering_methods<matrix_t>;
 
 void connected_comps(matrix_t g, part_vt part_d){
     ordinal_t n = g.numRows();
@@ -90,176 +86,6 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
-void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
-    Kokkos::parallel_for("set v weights", r_policy(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
-        ordinal_t c = map(i);
-        Kokkos::atomic_add(&out(c), in(i));
-    });
-}
-
-void downsample(vtx_vt in, vtx_vt out, vtx_view_t map){
-    Kokkos::parallel_for("set v weights", r_policy(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
-        ordinal_t c = map(i);
-        out(c) = in(i);
-    });
-}
-
-template <bool improve>
-part_vt leiden_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, part_vt input){
-    std::vector<clt> levels;
-    std::vector<part_vt> parts;
-    levels.push_back(top);
-    double aggregate = 0;
-    ref_t refiner;
-    part_vt part("cluster assignments", top.mtx.numRows());
-    if(!improve){
-        Kokkos::parallel_for("set initial assignments", r_policy(0, top.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = x;
-        });
-    } else Kokkos::deep_copy(part, input);
-    while(true) {
-        clt c = levels[levels.size() - 1];
-        // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
-        double old_obj = rfd.obj;
-        if(levels.size() == 1) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
-        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
-        if(old_obj == rfd.obj){
-            if(levels.size() == 1) refiner.ensure_improvement_outer<true, false>(c.mtx, c.wdeg, part, rfd, !improve, mem, part);
-            else refiner.ensure_improvement_outer<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, part);
-        }
-        if(rfd.label_count == c.mtx.numRows()){
-            parts.push_back(part);
-            break;
-        }
-        part_vt louv = part;
-        int coarse_vtx_count = 0;
-        part_vt coarse_map;
-        if(levels.size() == 1) coarse_map = lr_t::coarsen_leidenR<true>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
-        else coarse_map = lr_t::coarsen_leidenR<false>(c.mtx, c.wdeg, louv, mem, rfd, coarse_vtx_count);
-        parts.push_back(coarse_map);
-        if(coarse_vtx_count < c.mtx.numRows()){
-            Kokkos::Timer t;
-            contracter_t contracter;
-            clt next_clt;
-            if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, coarse_map, coarse_vtx_count, mem);
-            else next_clt = contracter.build_coarse_graph<false>(c, coarse_map, coarse_vtx_count, mem);
-            next_clt.wdeg = wgt_view_t("weighted degree 2", coarse_vtx_count);
-            coarsen_vtx_w(c.wdeg, next_clt.wdeg, coarse_map);
-
-            part = part_vt("cluster assignments coarse", coarse_vtx_count);
-            downsample(louv, part, coarse_map);
-
-            // rfd.update(next_clt.mtx, next_clt.wdeg);
-
-            levels.push_back(next_clt);
-            aggregate += t.seconds();
-        } else {
-            // avoid creating new graph if leidenR didn't contract any vertices
-            // which may happen with astronomically low probability for any input clustering
-            // or if input clustering is very bad
-            levels.push_back(c);
-        }
-    }
-
-    // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
-    experiment.addMeasurement(Measurement::Contract, aggregate);
-    // std::cout << rfd.obj << std::endl;
-    // std::cout << rfd.label_count << std::endl;
-    int64_t t_nnz = 0;
-    for(const clt& level : levels){
-        t_nnz += level.mtx.nnz();
-    }
-    experiment.setTotalNnz(t_nnz);
-    experiment.setLevelCount(levels.size());
-    for(int i = levels.size() - 2; i >= 0; i--){
-        clt c = levels[i];
-        part_vt coarse_part = parts[i + 1];
-        part_vt fine_part = parts[i];
-        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            fine_part(x) = coarse_part(fine_part(x));
-        });
-#ifdef LEIDEN_PLUS
-        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
-        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, fine_part, rfd, false, mem, part);
-#endif
-    }
-    return parts[0];
-}
-
-template <bool constrained>
-part_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, vtx_vt constraint){
-    if(constrained) rfd.update(top.mtx, top.wdeg);
-    std::vector<clt> levels;
-    std::vector<part_vt> parts;
-    levels.push_back(top);
-    double aggregate = 0;
-    ref_t refiner;
-    while(true) {
-        clt c = levels[levels.size() - 1];
-        // std::cout << "Pre-refine" << std::endl;
-        part_vt part("cluster assignments", c.mtx.numRows());
-        Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = x;
-        });
-        if(levels.size() == 1) refiner.jet_refine<true, constrained>(c.mtx, c.wdeg, part, rfd, true, mem, constraint);
-        else refiner.jet_refine<false, constrained>(c.mtx, c.wdeg, part, rfd, true, mem, constraint);
-        parts.push_back(part);
-        if(rfd.label_count < c.mtx.numRows()){
-            Kokkos::Timer t;
-            contracter_t contracter;
-            clt next_clt;
-            if(levels.size() == 1) next_clt = contracter.build_coarse_graph<true>(c, part, rfd.label_count, mem);
-            else next_clt = contracter.build_coarse_graph<false>(c, part, rfd.label_count, mem);
-            wgt_view_t td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
-            next_clt.wdeg = wgt_view_t("weighted degree 2", rfd.label_count);
-            Kokkos::deep_copy(next_clt.wdeg, td_rfd);
-            levels.push_back(next_clt);
-
-            if(constrained) {
-                vtx_vt next_constraint("next constraint", rfd.label_count);
-                downsample(constraint, next_constraint, part);
-                constraint = next_constraint;
-            }
-
-            aggregate += t.seconds();
-        } else {
-            break;
-        }
-    }
-    
-    int64_t t_nnz = 0;
-    for(const clt& level : levels){
-        t_nnz += level.mtx.nnz();
-    }
-    experiment.setTotalNnz(t_nnz);
-    experiment.setLevelCount(levels.size());
-
-    // std::cout << "Post coarsen obj: " << rfd.obj << std::endl;
-    if(levels.size() > 1){
-        // last level has the same partition as previous level
-        // so refining this level on the uncoarsening pass
-        // would not integrate any coarse information
-        levels.pop_back();
-        parts.pop_back();
-    }
-    
-    // levels.size()-2 so that (i+1) is in bounds
-    for(int i = levels.size() - 2; i >= 0; i--){
-        clt c = levels[i];
-        part_vt coarse_part = parts[i + 1];
-        part_vt part = parts[i];
-        Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-            part(x) = coarse_part(part(x));
-        });
-        if(i == 0) refiner.jet_refine<true, false>(c.mtx, c.wdeg, part, rfd, false, mem, constraint);
-        else refiner.jet_refine<false, false>(c.mtx, c.wdeg, part, rfd, false, mem, constraint);
-    }
-
-    experiment.addMeasurement(Measurement::Contract, aggregate);
-    // std::cout << "Post uncoarsen obj: " << rfd.obj << std::endl;
-    return parts[0];
-}
-
 part_vt partition(matrix_t g,
                     wgt_view_t vweights,
                     double& obj,
@@ -276,9 +102,9 @@ part_vt partition(matrix_t g,
     std::cout << std::setprecision(6);
     part_vt constraint;
 #ifdef LEIDEN
-    part_vt part = leiden_part<false>(mem, c, rfd, experiment, constraint);
+    part_vt part = cm_t::leiden_part<false>(mem, c, rfd, experiment, constraint);
 #else
-    part_vt part = louvain_part<false>(mem, c, rfd, experiment, constraint);
+    part_vt part = cm_t::louvain_part<false>(mem, c, rfd, experiment, constraint);
 #endif
     double time = iteration.seconds();
     std::cout << "Cluster time: " << time << " " << rfd << std::endl;
@@ -286,15 +112,14 @@ part_vt partition(matrix_t g,
     for(int i = 0; i < extra_iterations; i++){
         constraint = part;
 #ifdef LEIDEN
-        part = leiden_part<true>(mem, c, rfd, experiment, constraint);
+        part = cm_t::leiden_part<true>(mem, c, rfd, experiment, constraint);
 #else
-        part = louvain_part<true>(mem, c, rfd, experiment, constraint);
+        part = cm_t::louvain_part<true>(mem, c, rfd, experiment, constraint);
 #endif
         time = iteration.seconds();
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
         iteration.reset();
     }
-    std::cout << std::endl;
     experiment.setModularity(rfd.obj);
     experiment.setEdgeCut(rfd.cut / 2);
     obj = rfd.obj;
