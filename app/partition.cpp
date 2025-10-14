@@ -120,6 +120,7 @@ part_vt partition(matrix_t g,
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
         iteration.reset();
     }
+    std::cout << std::endl;
     experiment.setModularity(rfd.obj);
     experiment.setEdgeCut(rfd.cut / 2);
     obj = rfd.obj;
