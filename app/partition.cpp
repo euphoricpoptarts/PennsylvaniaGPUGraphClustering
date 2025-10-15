@@ -120,7 +120,6 @@ part_vt partition(matrix_t g,
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
         iteration.reset();
     }
-    std::cout << std::endl;
     experiment.setModularity(rfd.obj);
     experiment.setEdgeCut(rfd.cut / 2);
     obj = rfd.obj;
@@ -163,7 +162,6 @@ int main(int argc, char **argv) {
         wgt_view_t vweights("vertex weights", g.numRows());
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
-
         int iters = 21;
         part_vt best_part;
         double best_mod = -1;
@@ -174,6 +172,7 @@ int main(int argc, char **argv) {
             part_vt part = partition(g, vweights, mod, extra_iterations, experiment);
             std::cout << "Total time: " << total_time.seconds() << std::endl;
             experiment.addMeasurement(Measurement::Total, total_time.seconds());
+            std::cout << std::endl;
             if(mod > best_mod){
                 best_mod = mod;
                 best_part = part;
