@@ -86,7 +86,7 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
-part_vt partition(matrix_t g,
+part_vt run_clustering(matrix_t g,
                     wgt_view_t vweights,
                     double& obj,
                     int extra_iterations,
@@ -136,15 +136,15 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <optional additional passes count> <optional partition_output_filename> <optional metrics output filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <graph_file> <optional additional passes count> <optional clustering_output_filename> <optional metrics output filename>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
     int extra_iterations = 0;
     if(argc >= 3) extra_iterations = atoi(argv[2]);
-    char *part_file = nullptr;
+    char *clusters_file = nullptr;
     if(argc >= 4){
-        part_file = argv[3];
+        clusters_file = argv[3];
     }
     char *metrics_file = nullptr;
     if(argc >= 5){
@@ -163,19 +163,19 @@ int main(int argc, char **argv) {
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
         int iters = 21;
-        part_vt best_part;
+        part_vt best_clusters;
         double best_mod = -1;
         for(int i = 0; i < iters; i++){
             ExperimentLoggerUtil<value_t> experiment;
             double mod;
             Kokkos::Timer total_time;
-            part_vt part = partition(g, vweights, mod, extra_iterations, experiment);
+            part_vt clusters = run_clustering(g, vweights, mod, extra_iterations, experiment);
             std::cout << "Total time: " << total_time.seconds() << std::endl;
             experiment.addMeasurement(Measurement::Total, total_time.seconds());
             std::cout << std::endl;
             if(mod > best_mod){
                 best_mod = mod;
-                best_part = part;
+                best_clusters = clusters;
             }
             if(metrics_file != nullptr){
                 experiment.log(metrics_file, i == 0, (i+1) == iters);
@@ -183,9 +183,9 @@ int main(int argc, char **argv) {
         }
 
         std::cout << std::setprecision(9) << "Best modularity found: " << best_mod << std::endl;
-        if(part_file != nullptr){
-            std::cout << "Writing best clustering to " << part_file << std::endl;
-            write_part(best_part, part_file);
+        if(clusters_file != nullptr){
+            std::cout << "Writing best clustering to " << clusters_file << std::endl;
+            write_part(best_clusters, clusters_file);
         } 
     }
     Kokkos::finalize();

@@ -37,7 +37,7 @@
 //
 // ************************************************************************
 #include "defs.h"
-#include "io.hpp"
+#include "io_mtx.hpp"
 #include <limits>
 
 using namespace jet_community;
@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     {
         matrix_t g;
         bool uniform_ew = false;
-        if(!load_metis_graph(g, uniform_ew, filename)) return -1;
+        if(!load_graph(g, uniform_ew, filename)) return -1;
         std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
         wgt_view_t vweights("vertex weights", g.numRows());
         Kokkos::deep_copy(vweights, 1);
