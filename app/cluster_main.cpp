@@ -53,6 +53,7 @@ using clt = typename contracter_t::coarse_level_triple;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
 
+// checks how many components graph has after "deleting" cut edges of part_d
 void connected_comps(matrix_t g, part_vt part_d){
     ordinal_t n = g.numRows();
     part_mt comp_ids("component ids", n);
@@ -136,19 +137,22 @@ int main(int argc, char **argv) {
 
     if (argc < 2) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <graph_file> <optional additional passes count> <optional clustering_output_filename> <optional metrics output filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <graph_file> <optional additional passes count> <optional trial count> <optional clustering_output_filename> <optional metrics output filename>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
     int extra_iterations = 0;
     if(argc >= 3) extra_iterations = atoi(argv[2]);
+    int trial_count = 0;
+    if(argc >= 4) trial_count = atoi(argv[3]);
+    if(trial_count < 1) trial_count = 1;
     char *clusters_file = nullptr;
-    if(argc >= 4){
-        clusters_file = argv[3];
+    if(argc >= 5){
+        clusters_file = argv[4];
     }
     char *metrics_file = nullptr;
-    if(argc >= 5){
-        metrics_file = argv[4];
+    if(argc >= 6){
+        metrics_file = argv[5];
     }
 
     Kokkos::initialize(argc, argv);
@@ -162,10 +166,9 @@ int main(int argc, char **argv) {
         wgt_view_t vweights("vertex weights", g.numRows());
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
-        int iters = 21;
         part_vt best_clusters;
         double best_mod = -1;
-        for(int i = 0; i < iters; i++){
+        for(int i = 0; i < trial_count; i++){
             ExperimentLoggerUtil<value_t> experiment;
             double mod;
             Kokkos::Timer total_time;
@@ -178,7 +181,7 @@ int main(int argc, char **argv) {
                 best_clusters = clusters;
             }
             if(metrics_file != nullptr){
-                experiment.log(metrics_file, i == 0, (i+1) == iters);
+                experiment.log(metrics_file, i == 0, (i+1) == trial_count);
             }
         }
 
