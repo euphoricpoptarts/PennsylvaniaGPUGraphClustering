@@ -245,10 +245,15 @@ void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& r
     exec_space().fence();
     ordinal_t new_parts = mem.s_mem.scan_host();
     if(new_parts > 0){
+        ordinal_t curr_labels = rfd.label_count;
+        vtx_vt has_members = Kokkos::subview(mem.s_mem.zeros1, std::make_pair((ordinal_t)0, curr_labels));
+        Kokkos::parallel_for("set used labels", policy_t(0, part.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
+            ordinal_t c = part(i);
+            has_members(c) = 1;
+        });
         ordinal_t avail = 0;
         Kokkos::parallel_scan("find available labels", policy_t(0, rfd.label_count), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-            // FIX THIS FOR ZERO DEG CLUSTERS
-            if(total_deg(i) == 0){
+            if(has_members(i) == 0){
                 if(final){
                     if(update < new_parts){
                         ordinal_t x = vtx1(update);
@@ -261,9 +266,10 @@ void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& r
         }, mem.s_mem.scan_host);
         exec_space().fence();
         avail = mem.s_mem.scan_host();
+        // must reset this memory to zero for later usage
+        Kokkos::deep_copy(exec_space(), has_members, 0);
         if(avail < new_parts){
             ordinal_t needed = new_parts - avail;
-            ordinal_t curr_labels = rfd.label_count;
             rfd.label_count += needed;
             Kokkos::parallel_for("set additional labels", policy_t(avail, new_parts), KOKKOS_LAMBDA(const ordinal_t x){
                 ordinal_t i = vtx1(x);
