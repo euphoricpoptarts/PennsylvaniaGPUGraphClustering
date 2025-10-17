@@ -213,9 +213,6 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     if(self_loops > 0){
         std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
     }
-    // if we don't clear this here
-    // then it sometimes (somehow) affects the timing of the clustering algorithm
-    // unique_edges.clear();
     edge_offset_t sum = 0;
     // compute row map
     for(ordinal_t i = 0; i <= n; i++){

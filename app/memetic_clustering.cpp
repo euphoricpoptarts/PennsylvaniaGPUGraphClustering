@@ -82,7 +82,9 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2){
 }
 
 part_vt meme_cluster(matrix_t g,
-                    wgt_view_t vweights) {
+                    wgt_view_t vweights,
+                    int pop_size,
+                    int time_limit) {
 
     rfd_t rfd(g, vweights, 1.0, true);
     mem_t mem(g, rfd);
@@ -90,7 +92,6 @@ part_vt meme_cluster(matrix_t g,
     top.mtx = g;
     top.wdeg = vweights;
     std::vector<clustering> pop;
-    int pop_size = 101;
     ExperimentLoggerUtil<value_t> dummy;
     std::cout << std::setprecision(9);
     for(int i = 0; i < pop_size; i++){
@@ -105,15 +106,15 @@ part_vt meme_cluster(matrix_t g,
         rfd.update(g, vweights);
     }
 
-    int epochs = 1000;
-    // Seed with a real random value, if available
     std::random_device r;
     std::default_random_engine e1(r());
     std::uniform_int_distribution<int> uniform_dist1(0, pop_size - 1);
     std::uniform_int_distribution<int> uniform_dist2(0, pop_size - 2);
     std::uniform_int_distribution<int> uniform_dist3(0, g.nnz());
     double best = 0;
-    for(int e = 0; e < epochs; e++){
+    int e = 0;
+    Kokkos::Timer t;
+    while(t.seconds() < time_limit) {
         for(int i = 0; i < pop_size; i++){
             int choice1 = uniform_dist1(e1);
             int choice2 = uniform_dist2(e1);
@@ -132,7 +133,9 @@ part_vt meme_cluster(matrix_t g,
             // create offspring
             part_vt c3 = cm_t::louvain_part<true>(mem, top, rfd, dummy, constraint);
             std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.obj;
-            c3 = cm_t::leiden_part<true>(mem, top, rfd, dummy, c3);
+            for(int x = 0; x < 5; x++){
+                c3 = cm_t::leiden_part<true>(mem, top, rfd, dummy, c3);
+            }
             std::cout << "; Post leiden obj: " << rfd.obj;
             if(rfd.obj > best){
                 best = rfd.obj;
@@ -165,6 +168,7 @@ part_vt meme_cluster(matrix_t g,
             rfd.update(g, vweights);
         }
         std::cout << "Epoch " << e << " best objective: " << best << std::endl;
+        e++;
     }
     int am = -1;
     double obj_max = 0;
@@ -187,15 +191,25 @@ void degree_weighting(const matrix_t& g, wgt_view_t vweights){
 
 int main(int argc, char **argv) {
 
-    if (argc < 2) {
+    if (argc < 4) {
         std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <graph_file> <optional clustering_output_filename>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <graph_file> <pop size> <time limit in seconds> <optional clustering_output_filename>" << std::endl;
         return -1;
     }
     char *filename = argv[1];
+    int pop_size = atoi(argv[2]);
+    if(pop_size < 10){
+        std::cout << "WARNING: Population size given as " << pop_size << " < 10. Setting population size to 10." << std::endl;
+        pop_size = 10;
+    }
+    int time_limit = atoi(argv[3]);
+    if(time_limit < 10){
+        std::cout << "WARNING: Time limit given as " << time_limit << "s < 10s. Setting time limit to 10s." << std::endl;
+        time_limit = 10;
+    }
     char *clusters_file = nullptr;
-    if(argc >= 3){
-        clusters_file = argv[2];
+    if(argc >= 5){
+        clusters_file = argv[4];
     }
 
     Kokkos::initialize(argc, argv);
@@ -210,7 +224,7 @@ int main(int argc, char **argv) {
         degree_weighting(g, vweights);
         //Kokkos::deep_copy(vweights, 1);
 
-        part_vt best_clusters = meme_cluster(g, vweights);
+        part_vt best_clusters = meme_cluster(g, vweights, pop_size, time_limit);
         if(clusters_file != nullptr){
             std::cout << "Writing best clustering to " << clusters_file << std::endl;
             write_part(best_clusters, clusters_file);
