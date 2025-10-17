@@ -5,7 +5,8 @@
 #include <string>
 #include <iostream>
 #include <fstream>
-#include <unordered_set>
+#include <vector>
+#include <functional>
 #include "io.hpp"
 
 namespace jet_community {
@@ -52,6 +53,25 @@ mm_meta get_mm_metadata(const char* f, const char* fmax){
     data.is_integer = (INTEGER == fields[3]);
     data.is_symmetric = (SYMMETRIC == fields[4]);
     return data;
+}
+
+uint64_t HASH_EMPTY = std::numeric_limits<uint64_t>::max();
+
+// basic linear-probing hash table
+bool is_new_entry(std::vector<uint64_t>& htable, uint64_t x){
+    std::hash<uint64_t> hash_f;
+    size_t cap = htable.size();
+    size_t mod = cap - 1;
+    size_t i = hash_f(x) & mod;
+    while(true){
+        if(htable[i] == HASH_EMPTY){
+            htable[i] = x;
+            return true;
+        } else if(htable[i] == x){
+            return false;
+        }
+        i = (i + 1) & mod;
+    }
 }
 
 bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
@@ -153,37 +173,43 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
         std::cerr << "Nonzeros expected: " << m << std::endl;
         return false;
     }
+    std::cout << "Finished reading data from " << fname << std::endl;
+    std::cout << "Beginning construction of graph" << std::endl;
 
     int self_loops = 0;
     edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row_map"), n + 1);
     edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
     Kokkos::deep_copy(row_map_m, 0);
-    // unique_edges should be deleted after this block
-    {
-        // count edges per vertex
-        std::unordered_set<uint64_t> unique_edges;
-        for(edge_offset_t j = 0; j < edges_read; j++){
-            ordinal_t u = src[j];
-            ordinal_t v = dst[j];
-            if(u == v){
-                self_loops++;
+    std::vector<uint64_t> unique_edges;
+    if(!metadata.is_symmetric){
+        size_t cap = 2;
+        while(cap < (size_t)m) cap <<= 1;
+        if(cap < (size_t)(1.1*m)) cap <<= 1;
+        // hashtable expects a power of 2 capacity
+        unique_edges.assign(cap, HASH_EMPTY);
+    }
+    // count edges per vertex
+    for(edge_offset_t j = 0; j < edges_read; j++){
+        ordinal_t u = src[j];
+        ordinal_t v = dst[j];
+        if(u == v){
+            self_loops++;
+            continue;
+        }
+        if(!metadata.is_symmetric){
+            uint64_t less = (u < v) ? u : v;
+            uint64_t more = (u > v) ? u : v;
+            uint64_t signature = less*n + more;
+            if(!is_new_entry(unique_edges, signature)){
+                // ignore this edge in a later loop
+                src[j] = dst[j];
                 continue;
             }
-            if(!metadata.is_symmetric){
-                uint64_t less = (u < v) ? u : v;
-                uint64_t more = (u > v) ? u : v;
-                uint64_t signature = less*n + more;
-                if(unique_edges.count(signature) != 0){
-                    // ignore this edge in a later loop
-                    src[j] = dst[j];
-                    continue;
-                }
-                unique_edges.insert(signature);
-            }
-            row_map_m(u)++;
-            row_map_m(v)++;
         }
+        row_map_m(u)++;
+        row_map_m(v)++;
     }
+    unique_edges.clear();
     if(self_loops > 0){
         std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
     }
@@ -231,7 +257,7 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
 
     graph_t g_graph(entries, row_map);
     g = matrix_t("input graph", n, values, g_graph);
-    std::cout << "Read graph from " << fname << " in " << std::setprecision(3) << t.seconds() << "s" << std::endl;
+    std::cout << "Read and constructed graph from " << fname << " in " << std::setprecision(3) << t.seconds() << "s" << std::endl;
     return true;
 }
 
