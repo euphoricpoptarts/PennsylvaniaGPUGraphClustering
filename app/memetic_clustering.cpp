@@ -57,17 +57,23 @@ struct clustering {
     int labels;
 };
 
-value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2){
-    value_t cut = 0;
-    // Kokkos::parallel_reduce("count cut", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i, value_t& update){
-    //     for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
-    //         ordinal_t v = g.graph.entries(j);
-    //         if(c1[i] != c1[v] && c2[i] == c2[v]) update += g.values(j);
-    //         else if(c1[i] == c1[v] && c2[i] != c2[v]) update += g.values(j);
-    //     }
-    // }, cut);
-    Kokkos::parallel_reduce("count cut", policy(g.numRows(), Kokkos::AUTO), KOKKOS_LAMBDA(const member& t, value_t& global_update){
-        ordinal_t i = t.league_rank();
+value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
+    value_t cut1 = 0, cut2 = 0;
+    ordinal_t n = c1.extent(0);
+    ordinal_t low = mem.p_mem.offset_large;
+    ordinal_t high = n - low;
+    vtx_view_t vtx_high = Kokkos::subview(mem.p_mem.order1, std::make_pair(low, n));
+    vtx_view_t vtx_low = Kokkos::subview(mem.p_mem.order1, std::make_pair(static_cast<ordinal_t>(0), low));
+    Kokkos::parallel_reduce("count cut", r_policy(0, low), KOKKOS_LAMBDA(const ordinal_t x, value_t& update){
+        ordinal_t i = vtx_low(x);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            ordinal_t v = g.graph.entries(j);
+            if(c1[i] != c1[v] && c2[i] == c2[v]) update += g.values(j);
+            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += g.values(j);
+        }
+    }, cut1);
+    Kokkos::parallel_reduce("count cut", policy(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t, value_t& global_update){
+        ordinal_t i = vtx_high(t.league_rank());
         value_t local_sum = 0;
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [&](const edge_offset_t j, value_t& update){
             ordinal_t v = g.graph.entries(j);
@@ -77,8 +83,8 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2){
         Kokkos::single(Kokkos::PerTeam(t), [&](){
             global_update += local_sum;
         });
-    }, cut);
-    return cut;
+    }, cut2);
+    return cut1 + cut2;
 }
 
 part_vt meme_cluster(matrix_t g,
@@ -150,7 +156,7 @@ part_vt meme_cluster(matrix_t g,
                 double obj = pop[p].obj;
                 if(obj < obj_max){
                     // value_t diff = uniform_dist3(e1);
-                    value_t diff = get_cut_diff(g, c3, pop[p].clusters);
+                    value_t diff = get_cut_diff(g, c3, pop[p].clusters, mem);
                     if(diff < min_diff){
                         min_diff = diff;
                         am = p;
