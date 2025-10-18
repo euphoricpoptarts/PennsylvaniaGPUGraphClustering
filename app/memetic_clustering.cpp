@@ -100,9 +100,9 @@ part_vt meme_cluster(matrix_t g,
         part_vt c = cm_t::leiden_part<false>(mem, top, rfd, dummy, dummy_constraint);
         clustering y;
         y.clusters = c;
-        y.obj = rfd.obj;
+        y.obj = rfd.get_objective();
         y.labels = rfd.label_count;
-        std::cout << "Adding clustering with obj: " << rfd.obj << std::endl;
+        std::cout << "Adding clustering with obj: " << rfd.get_objective() << std::endl;
         pop.push_back(y);
         rfd.reset(g, vweights);
     }
@@ -133,18 +133,18 @@ part_vt meme_cluster(matrix_t g,
             part_vt constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
             // create offspring
             part_vt c3 = cm_t::louvain_part<true>(mem, top, rfd, dummy, constraint);
-            std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.obj;
+            std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
             for(int x = 0; x < 5; x++){
                 c3 = cm_t::leiden_part<true>(mem, top, rfd, dummy, c3);
             }
-            std::cout << "; Post leiden obj: " << rfd.obj;
-            if(rfd.obj > best){
-                best = rfd.obj;
+            std::cout << "; Post leiden obj: " << rfd.get_objective();
+            if(rfd.get_objective() > best){
+                best = rfd.get_objective();
             }
 
             // replace worst with c3
             int am = -1;
-            double obj_max = rfd.obj;
+            double obj_max = rfd.get_objective();
             double min_diff = g.nnz();
             for(int p = 0; p < pop_size; p++){
                 double obj = pop[p].obj;
@@ -159,7 +159,7 @@ part_vt meme_cluster(matrix_t g,
             }
             if(am != -1){
                 pop[am].clusters = c3;
-                pop[am].obj = rfd.obj;
+                pop[am].obj = rfd.get_objective();
                 pop[am].labels = rfd.label_count;
             } else {
                 min_diff = 0;
