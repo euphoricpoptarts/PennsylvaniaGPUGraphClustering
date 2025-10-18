@@ -14,9 +14,8 @@ struct cluster_data {
 
     // metadata that is preserved between levels in the clustering scheme
     wgt_vt total_deg;
-    scalar_t g_deg = 0;
-    scalar_t v_total = 0;
-    scalar_t cut = 0;
+    scalar_t uncut = 0;
+    scalar_t top_nnz = 0;
     double obj = -1.0;
     ordinal_t label_count;
 
@@ -24,7 +23,7 @@ struct cluster_data {
     scalar_t last_pval = 0;
 
     // objective scaling
-    double penalty_scale = 1.0;
+    double lambda = 1.0;
 
     static scalar_t sum(const wgt_vt wdeg){
         scalar_t result = 0;
@@ -34,24 +33,22 @@ struct cluster_data {
         return result;
     }
 
-    cluster_data(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) {
+    cluster_data(const matrix_t g, const wgt_vt wdeg, double _lambda) {
         // this is not the true objective for a singleton clustering
         // but we should find a better one regardless so it doesn't matter
         obj = -1.0;
         total_deg = wgt_vt("total degree of clusters", g.numRows());
-        if(uniform) g_deg = g.nnz();
-        else g_deg = sum(g.values);
-        v_total = g.numRows();
-        cut = g_deg;
+        top_nnz = g.nnz();
+        Kokkos::deep_copy(exec_space(), total_deg, wdeg);
+        uncut = 0;
         label_count = g.numRows();
-        Kokkos::deep_copy(total_deg, wdeg);
-        penalty_scale = _penalty_scale;
+        lambda = _lambda;
     }
 
-    void update(const matrix_t g, const wgt_vt wdeg) {
+    void reset(const matrix_t g, const wgt_vt wdeg) {
         wgt_vt td_lhs = Kokkos::subview(total_deg, std::make_pair((ordinal_t)0, g.numRows()));
         Kokkos::deep_copy(td_lhs, wdeg);
-        cut = sum(g.values);
+        uncut = 0;
         label_count = g.numRows();
         update_objective();
     }
@@ -60,12 +57,11 @@ struct cluster_data {
         wgt_vt td_lhs = Kokkos::subview(total_deg, std::make_pair((ordinal_t)0, rhs.label_count));
         wgt_vt td_rhs = Kokkos::subview(rhs.total_deg, std::make_pair((ordinal_t)0, rhs.label_count));
         Kokkos::deep_copy(exec_space(), td_lhs, td_rhs);
-        g_deg = rhs.g_deg;
-        cut = rhs.cut;
-        v_total = rhs.v_total;
+        top_nnz = rhs.top_nnz;
+        uncut = rhs.uncut;
         obj = rhs.obj;
         label_count = rhs.label_count;
-        penalty_scale = rhs.penalty_scale;
+        lambda = rhs.lambda;
     }
 
     cluster_data(const cluster_data& rhs){
@@ -74,9 +70,7 @@ struct cluster_data {
     }
 
     double get_penalty_modifier() const {
-        double inv_gdeg = 1.0 / static_cast<double>(g_deg);
-        double modifier = penalty_scale * inv_gdeg;
-        return modifier;
+        return lambda;
     }
 
     void update_objective() {
@@ -87,18 +81,77 @@ struct cluster_data {
             int64_t c_size = total(l);
             update += c_size*c_size;
         }, square_sum);
-        double inv_gdeg = 1.0 / static_cast<double>(g_deg);
-        double penalty_factor = penalty_scale*inv_gdeg*inv_gdeg;
-        double m = 1.0 - static_cast<double>(cut) * inv_gdeg;
-        m -= static_cast<double>(square_sum)*penalty_factor;
-        // std::cout << "Objective " << m << std::endl;
+        double m = uncut;
+        m -= lambda * static_cast<double>(square_sum);
         obj = m;
     }
 
+    virtual void print(std::ostream& os) const {
+        os << "Cut: " << uncut / 2;
+        os << " Objective: " << obj;
+        os << " Labels: " << label_count;
+    }
+
+    // derived objectives need to apply scaling to obj
+    virtual double get_objective() const {
+        return obj;
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const cluster_data& cd) {
-        os << "Cut: " << cd.cut / 2;
-        os << " Modularity: " << cd.obj;
-        os << " Labels: " << cd.label_count;
+        cd.print(os);
         return os;
     }
+};
+
+template <typename matrix_t>
+struct modularity : public cluster_data<matrix_t> {
+    using Device = typename matrix_t::device_type;
+    using scalar_t = typename matrix_t::value_type;
+    using wgt_vt = Kokkos::View<scalar_t*, Device>;
+
+    modularity(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+        scalar_t g_deg = 0;
+        if(uniform) g_deg = g.nnz();
+        else g_deg = cluster_data<matrix_t>::sum(g.values);
+        cluster_data<matrix_t>::lambda = _penalty_scale / static_cast<double>(g_deg);
+    }
+
+    virtual double get_objective() const override {
+        return cluster_data<matrix_t>::obj * cluster_data<matrix_t>::lambda;
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << "Cut: " << (cluster_data<matrix_t>::top_nnz - cluster_data<matrix_t>::uncut) / 2;
+        os << " Modularity: " << get_objective();
+        os << " Labels: " << cluster_data<matrix_t>::label_count;
+    }
+
+};
+
+template <typename matrix_t>
+struct normalized_constant_potts : public cluster_data<matrix_t> {
+    using Device = typename matrix_t::device_type;
+    using scalar_t = typename matrix_t::value_type;
+    using wgt_vt = Kokkos::View<scalar_t*, Device>;
+
+    scalar_t g_deg = 0;
+
+    normalized_constant_potts(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+        if(uniform) g_deg = g.nnz();
+        else g_deg = cluster_data<matrix_t>::sum(g.values);
+        uint64_t v_total = g.numRows();
+        double denom = static_cast<double>(v_total * v_total);
+        cluster_data<matrix_t>::lambda = _penalty_scale * static_cast<double>(g_deg) / denom;
+    }
+
+    virtual double get_objective() const override {
+        return cluster_data<matrix_t>::obj / static_cast<double>(g_deg);
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << "Cut: " << (cluster_data<matrix_t>::top_nnz - cluster_data<matrix_t>::uncut) / 2;
+        os << " Normalized Constant-Potts: " << get_objective();
+        os << " Labels: " << cluster_data<matrix_t>::label_count;
+    }
+
 };

@@ -949,7 +949,7 @@ void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t
     gain_t curr_pval = pval_sum(pvals, prob.g.numRows());
     gain_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
-    curr_state.cut -= cut_change;
+    curr_state.uncut += cut_change;
     curr_state.update_objective();
 }
 
@@ -1164,7 +1164,7 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
     curr_state.copy(best_state);
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
+    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(prob, part, cdata, mem);
         // need to store this data
@@ -1216,7 +1216,7 @@ void ensure_improvement_outer(const matrix_t g, wgt_view_t wdeg, vtx_vt best_par
     curr_state.copy(best_state);
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.g_deg == g.nnz());
+    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(prob, part, cdata, mem);
         // need to store this data

@@ -92,7 +92,8 @@ part_vt run_clustering(matrix_t g,
                     double& obj,
                     int extra_iterations,
                     ExperimentLoggerUtil<value_t>& experiment) {
-    rfd_t rfd(g, vweights, 1.0, true);
+    modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
+    rfd_t& rfd = mod_objective;
     mem_t mem(g, rfd);
     clt c;
     c.mtx = g;
@@ -121,9 +122,9 @@ part_vt run_clustering(matrix_t g,
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
         iteration.reset();
     }
-    experiment.setModularity(rfd.obj);
-    experiment.setEdgeCut(rfd.cut / 2);
-    obj = rfd.obj;
+    experiment.setModularity(rfd.get_objective());
+    experiment.setEdgeCut((g.nnz() - rfd.uncut) / 2);
+    obj = rfd.get_objective();
     return part;
 }
 

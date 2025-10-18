@@ -86,7 +86,8 @@ part_vt meme_cluster(matrix_t g,
                     int pop_size,
                     int time_limit) {
 
-    rfd_t rfd(g, vweights, 1.0, true);
+    modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
+    rfd_t& rfd = mod_objective;
     mem_t mem(g, rfd);
     clt top;
     top.mtx = g;
@@ -103,7 +104,7 @@ part_vt meme_cluster(matrix_t g,
         y.labels = rfd.label_count;
         std::cout << "Adding clustering with obj: " << rfd.obj << std::endl;
         pop.push_back(y);
-        rfd.update(g, vweights);
+        rfd.reset(g, vweights);
     }
 
     std::random_device r;
@@ -165,7 +166,7 @@ part_vt meme_cluster(matrix_t g,
             }
             std::cout << "; Min diff: " << min_diff << std::endl;
             // std::cout << std::endl;
-            rfd.update(g, vweights);
+            rfd.reset(g, vweights);
         }
         std::cout << "Epoch " << e << " best objective: " << best << std::endl;
         e++;

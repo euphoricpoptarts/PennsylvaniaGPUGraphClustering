@@ -128,7 +128,7 @@ public:
 
     template <bool constrained>
     static vtx_vt louvain_part(mem_t& mem, clt top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, vtx_vt constraint){
-        if(constrained) rfd.update(top.mtx, top.wdeg);
+        if(constrained) rfd.reset(top.mtx, top.wdeg);
         std::vector<clt> levels;
         std::vector<vtx_vt> parts;
         levels.push_back(top);
