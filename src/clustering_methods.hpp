@@ -1,4 +1,4 @@
-#include "jet_refiner.hpp"
+#include "local_mover.hpp"
 #include "contract.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
@@ -29,7 +29,7 @@ public:
     using wg_t = weighted_graph<matrix_t>;
     using rfd_t = cluster_data<matrix_t>;
     using lr_t = leidenR<matrix_t, ordinal_t>;
-    using ref_t = jet_refiner<matrix_t>;
+    using lm_t = local_move_heuristic<matrix_t>;
 
     static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
         Kokkos::parallel_for("set v weights", policy_t(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
@@ -51,7 +51,7 @@ public:
         std::vector<vtx_vt> parts;
         levels.push_back(top);
         double aggregate = 0;
-        ref_t refiner;
+        lm_t local_mover;
         vtx_vt part("cluster assignments", top.mtx.numRows());
         if(!improve){
             Kokkos::parallel_for("set initial assignments", r_policy(0, top.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
@@ -62,11 +62,11 @@ public:
             wg_t c = levels[levels.size() - 1];
             // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
-            if(levels.size() == 1) refiner.template jet_refine<true, false>(c, part, rfd, !improve, mem, part);
-            else refiner.template jet_refine<false, false>(c, part, rfd, false, mem, part);
+            if(levels.size() == 1) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
+            else local_mover.template local_move<false, false>(c, part, rfd, false, mem, part);
             if(old_obj == rfd.obj){
-                if(levels.size() == 1) refiner.template ensure_improvement_outer<true, false>(c, part, rfd, !improve, mem, part);
-                else refiner.template ensure_improvement_outer<false, false>(c, part, rfd, false, mem, part);
+                if(levels.size() == 1) local_mover.template local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
+                else local_mover.template local_move_strict<false, false>(c, part, rfd, false, mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
@@ -118,8 +118,8 @@ public:
                 fine_part(x) = coarse_part(fine_part(x));
             });
     #ifdef LEIDEN_PLUS
-            if(i == 0) refiner.template jet_refine<true, false>(c, fine_part, rfd, false, mem, part);
-            else refiner.template jet_refine<false, false>(c, fine_part, rfd, false, mem, part);
+            if(i == 0) local_mover.template local_move<true, false>(c, fine_part, rfd, false, mem, part);
+            else local_mover.template local_move<false, false>(c, fine_part, rfd, false, mem, part);
     #endif
         }
         return parts[0];
@@ -132,7 +132,7 @@ public:
         std::vector<vtx_vt> parts;
         levels.push_back(top);
         double aggregate = 0;
-        ref_t refiner;
+        lm_t local_mover;
         bool drop_constraint = constrained;
         while(true) {
             wg_t c = levels[levels.size() - 1];
@@ -141,12 +141,12 @@ public:
             Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = x;
             });
-            if(levels.size() == 1) refiner.template jet_refine<true, constrained>(c, part, rfd, true, mem, constraint);
-            else refiner.template jet_refine<false, constrained>(c, part, rfd, true, mem, constraint);
+            if(levels.size() == 1) local_mover.template local_move<true, constrained>(c, part, rfd, true, mem, constraint);
+            else local_mover.template local_move<false, constrained>(c, part, rfd, true, mem, constraint);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
-                if(levels.size() == 1) refiner.template ensure_improvement_outer<true, constrained>(c, part, rfd, true, mem, constraint);
-                else refiner.template ensure_improvement_outer<false, constrained>(c, part, rfd, true, mem, constraint);
+                if(levels.size() == 1) local_mover.template local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
+                else local_mover.template local_move_strict<false, constrained>(c, part, rfd, true, mem, constraint);
             }
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
@@ -200,8 +200,8 @@ public:
             Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = coarse_part(part(x));
             });
-            if(i == 0) refiner.template jet_refine<true, false>(c, part, rfd, false, mem, constraint);
-            else refiner.template jet_refine<false, false>(c, part, rfd, false, mem, constraint);
+            if(i == 0) local_mover.template local_move<true, false>(c, part, rfd, false, mem, constraint);
+            else local_mover.template local_move<false, false>(c, part, rfd, false, mem, constraint);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);

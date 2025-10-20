@@ -50,7 +50,7 @@
 namespace jet_community {
 
 template<class crsMat>
-class jet_refiner {
+class local_move_heuristic {
 public:
 
     //helper for getting gain_t
@@ -147,7 +147,7 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
-vtx_vt ensure_improvement_inner(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem) {
+vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem) {
     const matrix_t& g = wg.mtx;
     vtx_vt dest_part = mem.p_mem.dest_part;
     obj_vt save_gains = mem.p_mem.obj_persistent;
@@ -739,7 +739,6 @@ void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t
 }
 
 //update datastructures assuming a "small" number of vertices are moved
-//2 kernels, 0 device-host syncs
 template <bool uniform>
 void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const vtx_vt dest_part, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = wg.mtx;
@@ -1151,7 +1150,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
 }
 
 template <bool uniform, bool constrained>
-void jet_refine(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1200,8 +1199,11 @@ void jet_refine(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     relabel_contiguously(best_part, best_state, mem);
 }
 
+// if a non-node optimal vertex exists, this function (almost) guarantees an improvement to the objective function
+// with some exceptions due to floating-point roundoff
+// this occurs specifically if a vertex is close to node-optimal, having a near-zero objective delta to a neighboring cluster 
 template <bool uniform, bool constrained>
-void ensure_improvement_outer(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1236,7 +1238,7 @@ void ensure_improvement_outer(const wg_t wg, vtx_vt best_part, refine_data& best
 
         if(moves.extent(0) == 0) break;
         if(i > 0 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
-        moves = ensure_improvement_inner(wg, moves, part, curr_state, mem);
+        moves = afterburner_filter_strict(wg, moves, part, curr_state, mem);
         if(moves.extent(0) == 0) break;
         perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
         //copy current partition and relevant data to output partition if following conditions pass
@@ -1245,7 +1247,9 @@ void ensure_improvement_outer(const wg_t wg, vtx_vt best_part, refine_data& best
             Kokkos::deep_copy(exec_space(), best_part, part);
             clone_pval(mem, g.numRows());
         } else if(curr_state.obj < best_state.obj) {
-            std::cout << "Clustering did not improve after moving " << moves.extent(0) << " vertices on iteration " << i << std::endl;
+            // this may occur when the current clustering is node optimal
+            std::cout << "INFO: Clustering did not improve after moving " << moves.extent(0) << " vertices on iteration " << i << std::endl;
+            std::cout << "INFO: This has occurred due to floating-point roundoff" << std::endl;
         }
         vtx_vt dest_part_init_subview = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
         // reset this cache because it causes accuracy problems in ensure_improvement
