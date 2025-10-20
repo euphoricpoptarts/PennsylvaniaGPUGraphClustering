@@ -395,7 +395,7 @@ public:
             if(order(i) == order(h)) hn(i) = i;
         });
         find_trees(vcmap, n, hn, order);
-        ensure_gamma_connectivity(wg, constraint, order, vtx_w, rfd.total_deg, mem, rfd);
+        ensure_gamma_connectivity(wg, vcmap, constraint, order, rfd.total_deg, mem, rfd);
         coarse_vtx_count = contigitize_clusters(vcmap, n);
 
         return vcmap;
