@@ -1,7 +1,7 @@
 #include "defs.h"
 #include "io.hpp"
 #include "io_mtx.hpp"
-#include "contract.hpp"
+#include "weighted_graph.h"
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
@@ -10,7 +10,7 @@
 using namespace jet_community;
 using rfd_t = cluster_data<matrix_t>;
 using contracter_t = contracter<matrix_t>;
-using clt = typename contracter_t::coarse_level_triple;
+using wg_t = weighted_graph<matrix_t>;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
 
@@ -95,15 +95,15 @@ part_vt meme_cluster(matrix_t g,
     modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
     rfd_t& rfd = mod_objective;
     mem_t mem(g, rfd);
-    clt top;
-    top.mtx = g;
-    top.wdeg = vweights;
+    wg_t wg;
+    wg.mtx = g;
+    wg.vtx_w = vweights;
     std::vector<clustering> pop;
     ExperimentLoggerUtil<value_t> dummy;
     std::cout << std::setprecision(9);
     for(int i = 0; i < pop_size; i++){
         part_vt dummy_constraint;
-        part_vt c = cm_t::leiden_part<false>(mem, top, rfd, dummy, dummy_constraint);
+        part_vt c = cm_t::leiden_part<false>(mem, wg, rfd, dummy, dummy_constraint);
         clustering y;
         y.clusters = c;
         y.obj = rfd.get_objective();
@@ -138,10 +138,10 @@ part_vt meme_cluster(matrix_t g,
             clustering c2 = pop[p2]; // choose parent 2
             part_vt constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
             // create offspring
-            part_vt c3 = cm_t::louvain_part<true>(mem, top, rfd, dummy, constraint);
+            part_vt c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
             std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
             for(int x = 0; x < 5; x++){
-                c3 = cm_t::leiden_part<true>(mem, top, rfd, dummy, c3);
+                c3 = cm_t::leiden_part<true>(mem, wg, rfd, dummy, c3);
             }
             std::cout << "; Post leiden obj: " << rfd.get_objective();
             if(rfd.get_objective() > best){

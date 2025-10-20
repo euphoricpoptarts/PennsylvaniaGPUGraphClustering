@@ -45,6 +45,7 @@
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
+#include "weighted_graph.h"
 
 namespace jet_community {
 
@@ -86,6 +87,7 @@ public:
     using member = typename team_policy_t::member_type;
     using refine_data = cluster_data<matrix_t>;
     using mem_t = memory_store<matrix_t>;
+    using wg_t = weighted_graph<matrix_t>;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
@@ -102,12 +104,6 @@ public:
         x ^= x << 5;
         return x;
     }
-
-struct problem {
-    matrix_t g;
-    wgt_view_t vtx_w;
-    wgt_view_t wdeg;
-};
 
 // vertex-part connectivity datastructure
 struct cdata_t {
@@ -151,8 +147,8 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
-vtx_vt ensure_improvement_inner(const problem& prob, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem) {
-    const matrix_t& g = prob.g;
+vtx_vt ensure_improvement_inner(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem) {
+    const matrix_t& g = wg.mtx;
     vtx_vt dest_part = mem.p_mem.dest_part;
     obj_vt save_gains = mem.p_mem.obj_persistent;
     float penalty_mod = rfd.get_penalty_modifier();
@@ -168,8 +164,8 @@ vtx_vt ensure_improvement_inner(const problem& prob, const vtx_vt moves, const v
         ordinal_t i = moves(x);
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        float wd = prob.wdeg(i);
-        float multi = wd*penalty_mod;
+        float w = wg.vtx_w(i);
+        float multi = w*penalty_mod;
         float obj_change = save_gains(i);
         // compute cut change
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
@@ -187,7 +183,7 @@ vtx_vt ensure_improvement_inner(const problem& prob, const vtx_vt moves, const v
         for(ordinal_t jx = 0; jx < x; jx++){
             ordinal_t v = moves(jx);
             ordinal_t vpart = dest_part(v);
-            float wgt = -multi*prob.wdeg(v);
+            float wgt = -multi*wg.vtx_w(v);
             obj_change -= (vpart == p) ? wgt : 0;
             obj_change += (vpart == best && best != NEW_PART) ? wgt : 0;
             vpart = part(v);
@@ -285,8 +281,8 @@ void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& r
 }
 
 template <bool uniform>
-vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& part, refine_data& rfd, mem_t& mem){
-    const matrix_t& g = prob.g;
+vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part, refine_data& rfd, mem_t& mem){
+    const matrix_t& g = wg.mtx;
     ordinal_t n = g.numRows();
     float penalty_mod = rfd.get_penalty_modifier();
     ordinal_t big_begin = mem.p_mem.offset_large;
@@ -315,8 +311,8 @@ vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& 
         ordinal_t i = large_vtx(t.league_rank());
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        float wd = prob.wdeg(i);
-        float multi = wd*penalty_mod;
+        float w = wg.vtx_w(i);
+        float multi = w*penalty_mod;
         float igain = save_gains(i);
         ordinal_t hi = hash(i);
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
@@ -328,7 +324,7 @@ vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& 
                 scalar_t wgt;
                 if constexpr(uniform) wgt = 1;
                 else wgt = g.values(j);
-                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                float q = static_cast<float>(wgt) - multi*wg.vtx_w(v);
                 update -= (vpart == p) ? q : 0;
                 update += (vpart == best && best != NEW_PART) ? q : 0;
                 vpart = part(v);
@@ -347,8 +343,8 @@ vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& 
         ordinal_t i = small_vtx(x);
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        float wd = prob.wdeg(i);
-        float multi = wd*penalty_mod;
+        float w = wg.vtx_w(i);
+        float multi = w*penalty_mod;
         float igain = save_gains(i);
         ordinal_t hi = hash(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
@@ -360,7 +356,7 @@ vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& 
                 scalar_t wgt;
                 if constexpr(uniform) wgt = 1;
                 else wgt = g.values(j);
-                float q = static_cast<float>(wgt) - multi*prob.wdeg(v);
+                float q = static_cast<float>(wgt) - multi*wg.vtx_w(v);
                 change -= (vpart == p) ? q : 0;
                 change += (vpart == best && best != NEW_PART) ? q : 0;
                 vpart = part(v);
@@ -393,14 +389,14 @@ vtx_vt afterburner_filter(vtx_vt candidates, const problem& prob, const vtx_vt& 
 //determines which vertices (if any) should be moved to another part to improve objective
 //8 kernels, 2 device-host syncs
 template <bool uniform, bool constrained>
-vtx_vt candidates_and_destinations(const problem& prob, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
-    const matrix_t& g = prob.g;
+vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
+    const matrix_t& g = wg.mtx;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
     vtx_vt dest_part = mem.p_mem.dest_part;
     obj_vt save_gains = mem.p_mem.obj_persistent;
     gain_vt total_deg = rfd.total_deg;
-    gain_vt wdeg = prob.wdeg;
+    gain_vt vtx_w = wg.vtx_w;
     gain_vt pvals = mem.p_mem.pvals;
     float penalty_mod = rfd.get_penalty_modifier();
     vtx_vt vtx1 = mem.s_mem.vtx1;
@@ -416,10 +412,10 @@ vtx_vt candidates_and_destinations(const problem& prob, const matrix_t& c_graph,
             return;
         }
         ordinal_t best = NO_MOVE;
-        float wd = wdeg(i);
-        float multi = wd*penalty_mod;
+        float w = vtx_w(i);
+        float multi = w*penalty_mod;
         ordinal_t p = part(i);
-        float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
+        float p_conn = pvals(i) - (total_deg(p) - w)*multi;
         // b_conn must be at least this value to pass filter
         float b_conn = p_conn - filter_ratio*(p_conn);
         if(p_conn < 0) b_conn = 0;
@@ -457,12 +453,12 @@ vtx_vt candidates_and_destinations(const problem& prob, const matrix_t& c_graph,
                 return;
             }
             ordinal_t team_size = t.team_size();
-            float wd = wdeg(i);
-            float multi = wd*penalty_mod;
+            float w = vtx_w(i);
+            float multi = w*penalty_mod;
             edge_offset_t start = c_graph.graph.row_map(i);
             edge_offset_t end = c_graph.graph.row_map(i+1);
             ordinal_t p = part(i);
-            float p_conn = pvals(i) - (total_deg(p) - wd)*multi;
+            float p_conn = pvals(i) - (total_deg(p) - w)*multi;
             // j_conn must be at least this value to pass filter
             float maxl = p_conn - filter_ratio*(p_conn);
             if(p_conn < 0) maxl = 0;
@@ -532,8 +528,8 @@ vtx_vt candidates_and_destinations(const problem& prob, const matrix_t& c_graph,
 }
 
 // stream-compacts order2 for the vertices adjacent to any changed vertex
-vtx_vt find_affected(const problem& prob, const vtx_vt swaps, mem_t& mem){
-    const matrix_t& g = prob.g;
+vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
+    const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
     vtx_vt swap_bit = mem.s_mem.zeros1;
     ordinal_t total = 0;
@@ -618,9 +614,9 @@ vtx_vt find_affected(const problem& prob, const vtx_vt swaps, mem_t& mem){
 
 // updates datastructures assuming a "large" number of vertices are moved
 template <bool uniform>
-void update_large(const problem& prob, const vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem){
-    const matrix_t& g = prob.g;
-    vtx_vt vtx1 = find_affected(prob, swaps, mem);
+void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem){
+    const matrix_t& g = wg.mtx;
+    vtx_vt vtx1 = find_affected(wg, swaps, mem);
     ordinal_t total = mem.s_mem.scan_host();
     ordinal_t big_begin = mem.p_mem.offset_mid;
     if(big_begin < g.numRows()){
@@ -745,8 +741,8 @@ void update_large(const problem& prob, const vtx_vt part, const vtx_vt swaps, cd
 //update datastructures assuming a "small" number of vertices are moved
 //2 kernels, 0 device-host syncs
 template <bool uniform>
-void update_small(const problem& prob, const vtx_vt part, const vtx_vt swaps, const vtx_vt dest_part, cdata_t& cdata, mem_t& mem){
-    const matrix_t& g = prob.g;
+void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const vtx_vt dest_part, cdata_t& cdata, mem_t& mem){
+    const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
     gain_vt pvals = mem.p_mem.pvals;
     Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
@@ -915,9 +911,9 @@ gain_t pval_sum(gain_vt pvals, ordinal_t n){
 //perform swaps, update gains, and compute change to cut and imbalance
 //4 kernels, 1 device-host syncs
 template <bool uniform>
-void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem, refine_data& curr_state){
-    const wgt_view_t& wdeg = prob.wdeg;
-    vtx_vt dest_part = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), prob.g.numRows()));
+void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem, refine_data& curr_state){
+    const wgt_view_t& vtx_w = wg.vtx_w;
+    vtx_vt dest_part = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), wg.mtx.numRows()));
     ordinal_t total_moves = swaps.extent(0);
     gain_vt pvals = mem.p_mem.pvals;
     wgt_view_t total_deg = curr_state.total_deg;
@@ -925,11 +921,11 @@ void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t
         ordinal_t i = swaps(x);
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        Kokkos::atomic_add(&total_deg(p), -wdeg(i));
-        Kokkos::atomic_add(&total_deg(best), wdeg(i));
+        Kokkos::atomic_add(&total_deg(p), -vtx_w(i));
+        Kokkos::atomic_add(&total_deg(best), vtx_w(i));
     });
     //change part assignments and update part sizes
-    if(!cdata.init || total_moves >= prob.g.numRows() * 0.03){
+    if(!cdata.init || total_moves >= wg.mtx.numRows() * 0.03){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
@@ -937,16 +933,16 @@ void perform_moves(const problem& prob, vtx_vt part, const vtx_vt swaps, cdata_t
             part(i) = best;
         });
         if(!cdata.init){
-            init_conn_graph<uniform>(prob, part, cdata, mem);
+            init_conn_graph<uniform>(wg, part, cdata, mem);
             Kokkos::deep_copy(exec_space(), dest_part, NULL_PART);
         } else {
-            update_large<uniform>(prob, part, swaps, cdata, mem);
+            update_large<uniform>(wg, part, swaps, cdata, mem);
         }
     } else {
         // cluster ids updated inside this function
-        update_small<uniform>(prob, part, swaps, dest_part, cdata, mem);
+        update_small<uniform>(wg, part, swaps, dest_part, cdata, mem);
     }
-    gain_t curr_pval = pval_sum(pvals, prob.g.numRows());
+    gain_t curr_pval = pval_sum(pvals, wg.mtx.numRows());
     gain_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
     curr_state.uncut += cut_change;
@@ -972,8 +968,8 @@ void fast_fill(vtx_vt a, ordinal_t V){
 
 //initialize conn hash tables for each vertex
 template <bool uniform>
-void init_conn_graph(const problem& prob, const vtx_vt& part, cdata_t& cdata, mem_t& mem){
-    const matrix_t& g = prob.g;
+void init_conn_graph(const wg_t& wg, const vtx_vt& part, cdata_t& cdata, mem_t& mem){
+    const matrix_t& g = wg.mtx;
     cdata.init = true;
     Kokkos::deep_copy(exec_space(), cdata.conn_vals, 0);
     fast_fill(cdata.conn_entries, NULL_PART);
@@ -1084,8 +1080,8 @@ void init_conn_graph(const problem& prob, const vtx_vt& part, cdata_t& cdata, me
 }
 
 //initializes datastructures
-cdata_t truncate_and_init_mem(mem_t& mem, problem& prob, int label_count, bool top){
-    const matrix_t g = prob.g;
+cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool top){
+    const matrix_t g = wg.mtx;
     ordinal_t n = g.numRows();
     cdata_t cdata;
     cdata.init = false;
@@ -1155,18 +1151,16 @@ void clone_pval(mem_t& mem, ordinal_t n){
 }
 
 template <bool uniform, bool constrained>
-void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
-    problem prob;
-    prob.g = g;
-    prob.wdeg = wdeg;
+void jet_refine(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+    const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
     curr_state.copy(best_state);
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.top_nnz == g.nnz());
+    cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(prob, part, cdata, mem);
+        init_conn_graph<uniform>(wg, part, cdata, mem);
         // need to store this data
         // because this is only otherwise stored if the partition improves
         // which it might not (the partition may be node optimal), even though leidenR can still shrink the graph
@@ -1190,11 +1184,11 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
-            moves = candidates_and_destinations<uniform, constrained>(prob, c_graph, part, curr_state, mem, filter_ratio, constraint);
-            moves = afterburner_filter<uniform>(moves, prob, part, curr_state, mem);
+            moves = candidates_and_destinations<uniform, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+            moves = afterburner_filter<uniform>(moves, wg, part, curr_state, mem);
             if(moves.extent(0) == 0) break;
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
-            perform_moves<uniform>(prob, part, moves, cdata, mem, curr_state);
+            perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
             if(curr_state.obj > best_state.obj){
                 best_state.copy(curr_state);
@@ -1207,18 +1201,16 @@ void jet_refine(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data
 }
 
 template <bool uniform, bool constrained>
-void ensure_improvement_outer(const matrix_t g, wgt_view_t wdeg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
-    problem prob;
-    prob.g = g;
-    prob.wdeg = wdeg;
+void ensure_improvement_outer(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+    const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
     curr_state.copy(best_state);
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
-    cdata_t cdata = truncate_and_init_mem(mem, prob, best_state.label_count, best_state.top_nnz == g.nnz());
+    cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(prob, part, cdata, mem);
+        init_conn_graph<uniform>(wg, part, cdata, mem);
         // need to store this data
         // because this is only otherwise stored if the partition improves
         // which it might not (the partition may be node optimal), even though leidenR can still shrink the graph
@@ -1234,7 +1226,7 @@ void ensure_improvement_outer(const matrix_t g, wgt_view_t wdeg, vtx_vt best_par
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        moves = candidates_and_destinations<uniform, constrained>(prob, c_graph, part, curr_state, mem, 0, constraint);
+        moves = candidates_and_destinations<uniform, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
 
         // move list needs to be in vtx2 or else bad things happen
         // that normally happens in the afterburner, which isn't called here
@@ -1244,9 +1236,9 @@ void ensure_improvement_outer(const matrix_t g, wgt_view_t wdeg, vtx_vt best_par
 
         if(moves.extent(0) == 0) break;
         if(i > 0 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
-        moves = ensure_improvement_inner(prob, moves, part, curr_state, mem);
+        moves = ensure_improvement_inner(wg, moves, part, curr_state, mem);
         if(moves.extent(0) == 0) break;
-        perform_moves<uniform>(prob, part, moves, cdata, mem, curr_state);
+        perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.obj > best_state.obj){
             best_state.copy(curr_state);

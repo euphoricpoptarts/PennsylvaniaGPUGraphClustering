@@ -7,6 +7,7 @@
 #include "Kokkos_UnorderedMap.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
+#include "weighted_graph.h"
 
 namespace jet_community {
 
@@ -28,6 +29,7 @@ public:
     using member = typename team_policy_t::member_type;
     using mem_t = memory_store<matrix_t>;
     using refine_data = cluster_data<matrix_t>;
+    using wg_t = weighted_graph<matrix_t>;
     // there is a problem edge-case in kokkos with MaxLoc that can be triggered rarely for any input graph
     // the problem will be fixed soon, use MaxFirstLoc in meantime
     using argmax_reducer_t = Kokkos::MaxFirstLoc<uint32_t, edge_offset_t, Device>;
@@ -37,8 +39,11 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr ordinal_t split = 1000000000;
 
-    static void ensure_gamma_connectivity(const matrix_t g, part_vt vcmap, part_vt constraint, vtx_vt order, const ordinal_t n, const wgt_vt wdeg, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
+    static void ensure_gamma_connectivity(const wg_t wg, part_vt vcmap, part_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
+        const matrix_t g = wg.mtx;
+        const wgt_vt vtx_w = wg.vtx_w;
+        const ordinal_t n = g.numRows();
         vtx_vt row_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
         vtx_vt store_atom = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<ordinal_t>(0), n));
         vtx_vt ids = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -76,7 +81,7 @@ public:
         // gets the total size of each cluster during construction by order of ids view
         Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
             ordinal_t i = ids(x);
-            scalar_t val = wdeg(i);
+            scalar_t val = vtx_w(i);
             if(final){
                 total_size(x) = update;
             }
@@ -120,7 +125,7 @@ public:
             ordinal_t c = vcmap(i);
             ordinal_t c_begin = row_map(c);
             scalar_t prev_size = total_size(x) - total_size(c_begin);
-            if(inner_conn(i) < gamma*wdeg(i)*prev_size){
+            if(inner_conn(i) < gamma*vtx_w(i)*prev_size){
                 // break cluster on x
                 Kokkos::atomic_min(&breakers(c), x);
             }
@@ -142,7 +147,7 @@ public:
             ordinal_t i = ids(x);
             ordinal_t c = vcmap(i);
             ordinal_t c_begin = row_map(c);
-            scalar_t curr_size = total_size(x) + wdeg(i) - total_size(c_begin);
+            scalar_t curr_size = total_size(x) + vtx_w(i) - total_size(c_begin);
             scalar_t other_size = total_deg(constraint(i)) - curr_size;
             scalar_t outer = outer_conn(x);
             if(c_begin > 0) outer -= outer_conn(c_begin - 1);
@@ -235,13 +240,14 @@ public:
     }
 
     template <bool uniform>
-    static part_vt coarsen_leidenR(const matrix_t& g,
-        const wgt_vt& wdeg,
+    static part_vt coarsen_leidenR(const wg_t wg,
         const part_vt& constraint,
         mem_t& mem,
         const refine_data& rfd,
         int& coarse_vtx_count) {
 
+        matrix_t g = wg.mtx;
+        wgt_vt vtx_w = wg.vtx_w;
         ordinal_t n = g.numRows();
         float gamma = rfd.get_penalty_modifier();
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -253,7 +259,7 @@ public:
         const wgt_vt total_deg = rfd.total_deg;
         Kokkos::parallel_for("determine well connected", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
             ordinal_t c = constraint(i);
-            scalar_t wd = wdeg(i);
+            scalar_t wd = vtx_w(i);
             // is vertex 'i' well connected to the rest of constraint cluster 'c'?
             if(pvals(i) >= gamma*wd*(total_deg(c) - wd)) well_conn(i) = 1;
             else well_conn(i) = 0;
@@ -268,7 +274,7 @@ public:
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
                 ordinal_t width = end - start;
-                float multi = gamma*wdeg(i);
+                float multi = gamma*vtx_w(i);
                 hasher_t hash;
                 ordinal_t jx = hash(seed + i);
                 // 0.001 chance to self-aggregate
@@ -283,7 +289,7 @@ public:
                     if(constraint(i) != constraint(v)) continue;
                     if(well_conn(v) == 0) continue;
                     scalar_t wgt = g.values(j);
-                    if(wgt >= multi*wdeg(v)){
+                    if(wgt >= multi*vtx_w(v)){
                         hn(i) = v;
                         return;
                     }
@@ -293,7 +299,7 @@ public:
                     if(constraint(i) != constraint(v)) continue;
                     if(well_conn(v) == 0) continue;
                     scalar_t wgt = g.values(j);
-                    if(wgt >= multi*wdeg(v)){
+                    if(wgt >= multi*vtx_w(v)){
                         hn(i) = v;
                         return;
                     }
@@ -309,7 +315,7 @@ public:
                 ordinal_t i = small_vtx(x);
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
-                float multi = gamma*wdeg(i);
+                float multi = gamma*vtx_w(i);
                 if(well_conn(i) == 0){
                     hn(i) = i;
                     return;
@@ -322,7 +328,7 @@ public:
                     if(constraint(i) != constraint(v)) continue;
                     if(well_conn(v) == 0) continue;
                     scalar_t wgt = g.values(j);
-                    float val = static_cast<float>(wgt) - multi*wdeg(v);
+                    float val = static_cast<float>(wgt) - multi*vtx_w(v);
                     if(val >= m){
                         m = val;
                         am = j;
@@ -340,7 +346,7 @@ public:
                 ordinal_t i = large_vtx(thread.league_rank());
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
-                float multi = gamma*wdeg(i);
+                float multi = gamma*vtx_w(i);
                 if(well_conn(i) == 0){
                     hn(i) = i;
                     return;
@@ -352,7 +358,7 @@ public:
                     if(constraint(i) != constraint(v)) return;
                     if(well_conn(v) == 0) return;
                     scalar_t wgt = g.values(idx);
-                    float val = static_cast<float>(wgt) - multi*wdeg(v);
+                    float val = static_cast<float>(wgt) - multi*vtx_w(v);
                     if(val >= local.val){
                         local.val = val;
                         local.loc = idx;
@@ -389,7 +395,7 @@ public:
             if(order(i) == order(h)) hn(i) = i;
         });
         find_trees(vcmap, n, hn, order);
-        ensure_gamma_connectivity(g, vcmap, constraint, order, n, wdeg, rfd.total_deg, mem, rfd);
+        ensure_gamma_connectivity(wg, constraint, order, vtx_w, rfd.total_deg, mem, rfd);
         coarse_vtx_count = contigitize_clusters(vcmap, n);
 
         return vcmap;

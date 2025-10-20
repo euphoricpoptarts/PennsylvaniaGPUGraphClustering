@@ -42,6 +42,7 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
+#include "weighted_graph.h"
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
@@ -88,6 +89,7 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
+    using wg_t = weighted_graph<matrix_t>;
     using mem_t = memory_store<matrix_t>;
     static constexpr ordinal_t get_null_val() {
         // this value must line up with the null value used by the hashmap
@@ -100,12 +102,6 @@ public:
     }
     static constexpr ordinal_t ORD_MAX  = get_null_val();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
-    // contains matrix and vertex weights corresponding to current level
-    // interp matrix maps previous level to this level
-    struct coarse_level_triple {
-        matrix_t mtx;
-        wgt_view_t wdeg;
-    };
 
 struct countingFunctor {
 
@@ -232,12 +228,12 @@ void fast_fill(vtx_view_t a, ordinal_t V){
 }
 
 template <bool uniform>
-coarse_level_triple build_coarse_graph(const coarse_level_triple level,
+wg_t build_coarse_graph(const wg_t curr_level,
     const vtx_view_t vcmap,
     const ordinal_t nc,
     mem_t& mem) {
 
-    matrix_t g = level.mtx;
+    matrix_t g = curr_level.mtx;
     ordinal_t n = g.numRows();
 
     Kokkos::Timer timer;
@@ -304,7 +300,7 @@ coarse_level_triple build_coarse_graph(const coarse_level_triple level,
 
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
-    coarse_level_triple next_level;
+    wg_t next_level;
     next_level.mtx = gc;
     return next_level;
 }

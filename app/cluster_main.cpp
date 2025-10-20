@@ -39,17 +39,16 @@
 #include "defs.h"
 #include "io.hpp"
 #include "io_mtx.hpp"
-#include "contract.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.hpp"
+#include "weighted_graph.h"
 #include <queue>
 
 using namespace jet_community;
 using rfd_t = cluster_data<matrix_t>;
-using contracter_t = contracter<matrix_t>;
-using clt = typename contracter_t::coarse_level_triple;
+using wg_t = weighted_graph<matrix_t>;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
 
@@ -95,18 +94,17 @@ part_vt run_clustering(matrix_t g,
     modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
     rfd_t& rfd = mod_objective;
     mem_t mem(g, rfd);
-    clt c;
-    c.mtx = g;
-    c.wdeg = vweights;
-    clt active_clt = c;
+    wg_t wg;
+    wg.mtx = g;
+    wg.vtx_w = vweights;
     Kokkos::fence();
     Kokkos::Timer iteration;
     std::cout << std::setprecision(6);
     part_vt constraint;
 #ifdef LEIDEN
-    part_vt part = cm_t::leiden_part<false>(mem, c, rfd, experiment, constraint);
+    part_vt part = cm_t::leiden_part<false>(mem, wg, rfd, experiment, constraint);
 #else
-    part_vt part = cm_t::louvain_part<false>(mem, c, rfd, experiment, constraint);
+    part_vt part = cm_t::louvain_part<false>(mem, wg, rfd, experiment, constraint);
 #endif
     double time = iteration.seconds();
     std::cout << "Cluster time: " << time << " " << rfd << std::endl;
@@ -114,9 +112,9 @@ part_vt run_clustering(matrix_t g,
     for(int i = 0; i < extra_iterations; i++){
         constraint = part;
 #ifdef LEIDEN
-        part = cm_t::leiden_part<true>(mem, c, rfd, experiment, constraint);
+        part = cm_t::leiden_part<true>(mem, wg, rfd, experiment, constraint);
 #else
-        part = cm_t::louvain_part<true>(mem, c, rfd, experiment, constraint);
+        part = cm_t::louvain_part<true>(mem, wg, rfd, experiment, constraint);
 #endif
         time = iteration.seconds();
         std::cout << "Cluster time: " << time << " " << rfd << std::endl;
