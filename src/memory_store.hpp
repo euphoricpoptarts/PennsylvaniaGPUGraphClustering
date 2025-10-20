@@ -85,7 +85,7 @@ struct memory_store {
     scratch s_mem;
     cluster_data<matrix_t> spare_cluster_data;
 
-    memory_store(const matrix_t largest, cluster_data<matrix_t> clone_target) :
+    memory_store(const matrix_t largest, cluster_data<matrix_t>& clone_target) :
         p_mem(largest), 
         s_mem(largest.numRows()),
         spare_cluster_data(clone_target) {}
