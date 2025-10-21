@@ -34,15 +34,13 @@ struct cluster_data {
     }
 
     cluster_data(const matrix_t g, const wgt_vt wdeg, double _lambda) {
-        // this is not the true objective for a singleton clustering
-        // but we should find a better one regardless so it doesn't matter
-        obj = -1.0;
         total_deg = wgt_vt("total degree of clusters", g.numRows());
         top_nnz = g.nnz();
         Kokkos::deep_copy(exec_space(), total_deg, wdeg);
         uncut = 0;
         label_count = g.numRows();
         lambda = _lambda;
+        update_objective();
     }
 
     void reset(const matrix_t g, const wgt_vt wdeg) {
@@ -87,9 +85,7 @@ struct cluster_data {
     }
 
     virtual void print(std::ostream& os) const {
-        os << "Cut: " << uncut / 2;
-        os << " Objective: " << obj;
-        os << " Labels: " << label_count;
+        os << " Objective: " << obj << ";";
     }
 
     // derived objectives need to apply scaling to obj
@@ -98,48 +94,79 @@ struct cluster_data {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const cluster_data& cd) {
+        os << "Cut: " << (cd.top_nnz - cd.uncut) / 2 << ";";
         cd.print(os);
+        os << " Labels: " << cd.label_count;
         return os;
     }
+
+    virtual ~cluster_data(){}
 };
 
+// these derived classes manage the calculation of lambda and normalizing of the objective
 template <typename matrix_t>
 struct modularity : public cluster_data<matrix_t> {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
 
+    double inv_gdeg = 0;
+
     modularity(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
         scalar_t g_deg = 0;
         if(uniform) g_deg = g.nnz();
-        else g_deg = cluster_data<matrix_t>::sum(g.values);
-        cluster_data<matrix_t>::lambda = _penalty_scale / static_cast<double>(g_deg);
+        else g_deg = cluster_data<matrix_t>::sum(wdeg);
+        inv_gdeg = 1.0 / static_cast<double>(g_deg);
+        cluster_data<matrix_t>::lambda = _penalty_scale * inv_gdeg;
     }
 
     virtual double get_objective() const override {
-        return cluster_data<matrix_t>::obj * cluster_data<matrix_t>::lambda;
+        return cluster_data<matrix_t>::obj * inv_gdeg;
     }
 
     virtual void print(std::ostream& os) const override {
-        os << "Cut: " << (cluster_data<matrix_t>::top_nnz - cluster_data<matrix_t>::uncut) / 2;
-        os << " Modularity: " << get_objective();
-        os << " Labels: " << cluster_data<matrix_t>::label_count;
+        os << " Modularity: " << get_objective() << ";";
     }
 
+    virtual ~modularity(){}
 };
 
 template <typename matrix_t>
-struct normalized_constant_potts : public cluster_data<matrix_t> {
+struct constant_potts : public cluster_data<matrix_t> {
+    using Device = typename matrix_t::device_type;
+    using scalar_t = typename matrix_t::value_type;
+    using wgt_vt = Kokkos::View<scalar_t*, Device>;
+
+    scalar_t v_total = 0;
+
+    constant_potts(const matrix_t g, const wgt_vt wdeg, double _penalty_scale) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+        v_total = g.numRows();
+        cluster_data<matrix_t>::lambda = _penalty_scale * 0.5;
+    }
+
+    virtual double get_objective() const override {
+        return cluster_data<matrix_t>::obj + cluster_data<matrix_t>::lambda*v_total;
+    }
+
+    virtual void print(std::ostream& os) const override {
+        os << " Constant-Potts: " << get_objective() << ";";
+    }
+
+    virtual ~constant_potts(){}
+};
+
+template <typename matrix_t>
+struct normalized_lcc : public cluster_data<matrix_t> {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
 
     scalar_t g_deg = 0;
 
-    normalized_constant_potts(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+    normalized_lcc(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
         if(uniform) g_deg = g.nnz();
         else g_deg = cluster_data<matrix_t>::sum(g.values);
-        uint64_t v_total = g.numRows();
+        uint64_t v_total = cluster_data<matrix_t>::sum(wdeg);
         double denom = static_cast<double>(v_total * v_total);
         cluster_data<matrix_t>::lambda = _penalty_scale * static_cast<double>(g_deg) / denom;
     }
@@ -149,9 +176,8 @@ struct normalized_constant_potts : public cluster_data<matrix_t> {
     }
 
     virtual void print(std::ostream& os) const override {
-        os << "Cut: " << (cluster_data<matrix_t>::top_nnz - cluster_data<matrix_t>::uncut) / 2;
-        os << " Normalized Constant-Potts: " << get_objective();
-        os << " Labels: " << cluster_data<matrix_t>::label_count;
+        os << " Normalized LambdaCC: " << get_objective() << ";";
     }
 
+    virtual ~normalized_lcc(){}
 };

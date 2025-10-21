@@ -194,17 +194,21 @@ void write_part(part_vt part_d, const char *fname){
     ofp.close();
 }
 
-part_vt load_part(ordinal_t n, const char *fname){
+template <class view_t>
+view_t load_view(ordinal_t n, const char *fname){
     std::ifstream ifp(fname);
-    part_vt part_d("device part", n);
-    if(!ifp.is_open()) return part_d;
-    part_mt part = Kokkos::create_mirror_view(part_d);
+    view_t v_d("device view", n);
+    if(!ifp.is_open()){
+        std::cerr << "FATAL ERROR: Could not open " << fname << std::endl;
+        return v_d;
+    }
+    typename view_t::HostMirror v = Kokkos::create_mirror_view(v_d);
     for(ordinal_t x = 0; x < n; x++){
-        ifp >> part(x);
+        ifp >> v(x);
     }
     ifp.close();
-    Kokkos::deep_copy(part_d, part);
-    return part_d;
+    Kokkos::deep_copy(v_d, v);
+    return v_d;
 }
 
 }

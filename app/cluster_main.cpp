@@ -44,7 +44,9 @@
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.hpp"
 #include "weighted_graph.h"
+#include "parse_args.hpp"
 #include <queue>
+#include <memory>
 
 using namespace jet_community;
 using rfd_t = cluster_data<matrix_t>;
@@ -86,43 +88,55 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
-part_vt run_clustering(matrix_t g,
-                    wgt_view_t vweights,
+std::unique_ptr<rfd_t> get_objective(const wg_t wg, const cluster_args args){
+    switch(args.obj_type){
+        case Objective::Modularity:
+            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
+        case Objective::WModularity:
+            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, false);
+        case Objective::NLCC:
+            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
+        case Objective::CPM:
+            return std::make_unique<constant_potts<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
+        default:
+            return std::make_unique<cluster_data<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
+    }
+}
+
+part_vt run_clustering(const wg_t wg,
                     double& obj,
-                    int extra_iterations,
+                    cluster_args args,
                     ExperimentLoggerUtil<value_t>& experiment) {
-    modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
-    rfd_t& rfd = mod_objective;
-    mem_t mem(g, rfd);
-    wg_t wg;
-    wg.mtx = g;
-    wg.vtx_w = vweights;
+    std::unique_ptr<rfd_t> rfd = get_objective(wg, args);
+    mem_t mem(wg.mtx, *rfd);
     Kokkos::fence();
     Kokkos::Timer iteration;
     std::cout << std::setprecision(6);
     part_vt constraint;
 #ifdef LEIDEN
-    part_vt part = cm_t::leiden_part<false>(mem, wg, rfd, experiment, constraint);
+    part_vt part = cm_t::leiden_part<false>(mem, wg, *rfd, experiment, constraint);
 #else
-    part_vt part = cm_t::louvain_part<false>(mem, wg, rfd, experiment, constraint);
+    part_vt part = cm_t::louvain_part<false>(mem, wg, *rfd, experiment, constraint);
 #endif
+    Kokkos::fence();
     double time = iteration.seconds();
-    std::cout << "Cluster time: " << time << " " << rfd << std::endl;
+    std::cout << "Cluster time: " << time << "; " << *rfd << std::endl;
     iteration.reset();
-    for(int i = 0; i < extra_iterations; i++){
+    for(int i = 0; i < args.n_successive_iterations; i++){
         constraint = part;
 #ifdef LEIDEN
-        part = cm_t::leiden_part<true>(mem, wg, rfd, experiment, constraint);
+        part = cm_t::leiden_part<true>(mem, wg, *rfd, experiment, constraint);
 #else
-        part = cm_t::louvain_part<true>(mem, wg, rfd, experiment, constraint);
+        part = cm_t::louvain_part<true>(mem, wg, *rfd, experiment, constraint);
 #endif
+        Kokkos::fence();
         time = iteration.seconds();
-        std::cout << "Cluster time: " << time << " " << rfd << std::endl;
+        std::cout << "Cluster time: " << time << "; " << *rfd << std::endl;
         iteration.reset();
     }
-    experiment.setModularity(rfd.get_objective());
-    experiment.setEdgeCut((g.nnz() - rfd.uncut) / 2);
-    obj = rfd.get_objective();
+    experiment.setModularity(rfd->get_objective());
+    experiment.setEdgeCut((wg.mtx.nnz() - rfd->uncut) / 2);
+    obj = rfd->get_objective();
     return part;
 }
 
@@ -132,27 +146,43 @@ void degree_weighting(const matrix_t& g, wgt_view_t vweights){
     });
 }
 
+void weighted_degree_weighting(const matrix_t& g, wgt_view_t vweights){
+    Kokkos::parallel_for("set v weights", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
+        value_t weighted_degree = 0;
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+            weighted_degree += g.values(j);
+        }
+        vweights(i) = weighted_degree;
+    });
+}
+
+wgt_view_t get_vtx_weights(const matrix_t g, const cluster_args args){
+    if(args.vw_file.size() > 0){
+        return load_view<wgt_view_t>(g.numRows(), args.vw_file.c_str());
+    } else {
+        wgt_view_t vweights(Kokkos::ViewAllocateWithoutInitializing("vertex weights"), g.numRows());
+        switch (args.obj_type){
+            case Objective::Modularity:
+                std::cout << "Degree vertex weighting" << std::endl;
+                degree_weighting(g, vweights);
+                break;
+            case Objective::WModularity:
+                std::cout << "Weighted-Degree vertex weighting" << std::endl;
+                weighted_degree_weighting(g, vweights);
+                break;
+            default:
+                std::cout << "Uniform unit vertex weighting" << std::endl;
+                Kokkos::deep_copy(vweights, 1);
+        }
+        return vweights;
+    }
+}
+
 int main(int argc, char **argv) {
 
-    if (argc < 2) {
-        std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <graph_file> <optional additional passes count> <optional trial count> <optional clustering_output_filename> <optional metrics output filename>" << std::endl;
-        return -1;
-    }
-    char *filename = argv[1];
-    int extra_iterations = 0;
-    if(argc >= 3) extra_iterations = atoi(argv[2]);
-    int trial_count = 0;
-    if(argc >= 4) trial_count = atoi(argv[3]);
-    if(trial_count < 1) trial_count = 1;
-    char *clusters_file = nullptr;
-    if(argc >= 5){
-        clusters_file = argv[4];
-    }
-    char *metrics_file = nullptr;
-    if(argc >= 6){
-        metrics_file = argv[5];
-    }
+    cluster_args args = parse_args(argc, argv);
+    if(!args.valid) return -1;
+    char* metrics_file = nullptr;
 
     Kokkos::initialize(argc, argv);
     //must scope kokkos-related data
@@ -160,18 +190,20 @@ int main(int argc, char **argv) {
     {
         matrix_t g;
         bool uniform_ew = false;
-        if(!load_graph(g, uniform_ew, filename)) return -1;
-        std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
-        wgt_view_t vweights("vertex weights", g.numRows());
-        degree_weighting(g, vweights);
-        //Kokkos::deep_copy(vweights, 1);
+        if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
+        std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
+
+        wg_t wg;
+        wg.mtx = g;
+        wg.vtx_w = get_vtx_weights(g, args);
         part_vt best_clusters;
-        double best_mod = -1;
-        for(int i = 0; i < trial_count; i++){
+        double best_mod = -std::numeric_limits<double>::infinity();
+        Kokkos::fence();
+        for(int i = 0; i < args.n_trials; i++){
             ExperimentLoggerUtil<value_t> experiment;
             double mod;
             Kokkos::Timer total_time;
-            part_vt clusters = run_clustering(g, vweights, mod, extra_iterations, experiment);
+            part_vt clusters = run_clustering(wg, mod, args, experiment);
             std::cout << "Total time: " << total_time.seconds() << std::endl;
             experiment.addMeasurement(Measurement::Total, total_time.seconds());
             std::cout << std::endl;
@@ -180,14 +212,14 @@ int main(int argc, char **argv) {
                 best_clusters = clusters;
             }
             if(metrics_file != nullptr){
-                experiment.log(metrics_file, i == 0, (i+1) == trial_count);
+                experiment.log(metrics_file, i == 0, (i+1) == args.n_trials);
             }
         }
 
         std::cout << std::setprecision(9) << "Best modularity found: " << best_mod << std::endl;
-        if(clusters_file != nullptr){
-            std::cout << "Writing best clustering to " << clusters_file << std::endl;
-            write_part(best_clusters, clusters_file);
+        if(args.output_file.size() > 0){
+            std::cout << "Writing best clustering to " << args.output_file << std::endl;
+            write_part(best_clusters, args.output_file.c_str());
         } 
     }
     Kokkos::finalize();

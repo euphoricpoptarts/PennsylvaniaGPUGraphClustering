@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
         wgt_view_t vweights("vertex weights", g.numRows());
         Kokkos::deep_copy(vweights, 1);
 
-        part_vt part = load_part(g.numRows(), part_file);
+        part_vt part = load_view<part_vt>(g.numRows(), part_file);
         std::cout << "Modularity: " << std::setprecision(9) << modularity(g, part, g.numRows(), g.nnz(), 1.0) << std::endl;
     }
     Kokkos::finalize();
