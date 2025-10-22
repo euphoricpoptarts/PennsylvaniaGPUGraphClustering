@@ -7,6 +7,7 @@
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.hpp"
 #include "vertex_weighting.hpp"
+#include "objective_helpers.hpp"
 #include <memory>
 
 using namespace jet_community;
@@ -15,21 +16,6 @@ using contracter_t = contracter<matrix_t>;
 using wg_t = weighted_graph<matrix_t>;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
-
-std::unique_ptr<rfd_t> get_objective(const wg_t wg, const base_args args){
-    switch(args.obj_type){
-        case Objective::Modularity:
-            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
-        case Objective::WModularity:
-            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
-        case Objective::NLCC:
-            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
-        case Objective::CPM:
-            return std::make_unique<constant_potts<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
-        default:
-            return std::make_unique<cluster_data<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
-    }
-}
 
 part_vt intersection_cluster(part_vt c1, part_vt c2, int l2){
 
@@ -215,11 +201,7 @@ int main(int argc, char **argv) {
         bool uniform_ew = false;
         if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
         std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
-        if(!uniform_ew && (args.obj_type == Objective::Modularity || args.obj_type == Objective::CPM)){
-            std::cout << "WARNING: Edge weights not compatible with objective. Setting edge weights to 1" << std::endl;
-            Kokkos::deep_copy(g.values, 1);
-            uniform_ew = true;
-        }
+        if(!uniform_ew) uniform_ew = sanitize_edge_weights(g, args);
         std::cout << std::endl;
 
         wg_t wg;

@@ -38,47 +38,47 @@
 // ************************************************************************
 #include "defs.h"
 #include "io_mtx.hpp"
+#include "weighted_graph.h"
+#include "parse_args.hpp"
+#include "vertex_weighting.hpp"
+#include "objective_helpers.hpp"
+#include "cluster_data.h"
 #include <limits>
+#include <memory>
 
 using namespace jet_community;
 
 using scalar_t = ordinal_t;
+using rfd_t = cluster_data<matrix_t>;
+using wg_t = weighted_graph<matrix_t>;
 
-double modularity(const matrix_t g, const part_vt labels, const ordinal_t label_count, scalar_t g_degree, double penalty_scale){
-    wgt_view_t total("total degree", label_count);
+void verify_objective(const wg_t wg, part_vt labels, const base_args args){
+    const matrix_t g = wg.mtx;
+    const wgt_view_t vtx_w = wg.vtx_w;
     ordinal_t n = g.numRows();
+    ordinal_t label_count = n;
+    wgt_view_t total("total degree", label_count);
     scalar_t uncut = 0;
     Kokkos::parallel_reduce("count degrees", r_policy(0, n), KOKKOS_LAMBDA(const ordinal_t i, scalar_t& update){
-        scalar_t td = 0;
         ordinal_t l = labels(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
-            td += g.values(j);
             ordinal_t v = g.graph.entries(j);
             if(l == labels(v)) update += g.values(j);
         }
-        Kokkos::atomic_add(&total(l), td);
+        Kokkos::atomic_add(&total(l), vtx_w(i));
 	}, uncut);
-    int64_t square_sum = 0;
-    Kokkos::parallel_reduce("sum modularity", r_policy(0, label_count), KOKKOS_LAMBDA(const ordinal_t l, int64_t& update){
-        int64_t square = total(l);
-        square = square*square;
-        update += square;
-    }, square_sum);
-    double inv_gdeg = 1.0 / static_cast<double>(g_degree);
-    double pen = penalty_scale*square_sum*inv_gdeg;
-    double m = (uncut - pen)*inv_gdeg;
-    return m;
+    std::unique_ptr<rfd_t> rfd = get_objective(wg, args);
+    Kokkos::deep_copy(rfd->total_deg, total);
+    rfd->uncut = uncut;
+    rfd->update_objective();
+    rfd->print(std::cout);
+    std::cout << std::endl;
 }
 
 int main(int argc, char **argv) {
 
-    if (argc < 3) {
-        std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <metis_graph_file> <part_file>" << std::endl;
-        return -1;
-    }
-    char *filename = argv[1];
-    char *part_file = argv[2];
+    const verify_args args = parse_verify_args(argc, argv);
+    if(!args.valid) return -1;
 
     Kokkos::initialize();
     //must scope kokkos-related data
@@ -86,13 +86,20 @@ int main(int argc, char **argv) {
     {
         matrix_t g;
         bool uniform_ew = false;
-        if(!load_graph(g, uniform_ew, filename)) return -1;
-        std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
-        wgt_view_t vweights("vertex weights", g.numRows());
-        Kokkos::deep_copy(vweights, 1);
+        if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
+        std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
+        if(!uniform_ew) uniform_ew = sanitize_edge_weights(g, args);
+        std::cout << std::endl;
 
-        part_vt part = load_view<part_vt>(g.numRows(), part_file);
-        std::cout << "Modularity: " << std::setprecision(9) << modularity(g, part, g.numRows(), g.nnz(), 1.0) << std::endl;
+        wg_t wg;
+        wg.mtx = g;
+        wg.vtx_w = get_vtx_weights(g, args);
+        wg.edge_uniform = uniform_ew;
+
+        part_vt part = load_view<part_vt>(g.numRows(), args.cluster_file.c_str());
+
+        std::cout << std::setprecision(9);
+        verify_objective(wg, part, args);
     }
     Kokkos::finalize();
 

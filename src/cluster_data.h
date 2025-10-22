@@ -85,7 +85,7 @@ struct cluster_data {
     }
 
     virtual void print(std::ostream& os) const {
-        os << " Objective: " << obj << ";";
+        os << "Objective: " << obj;
     }
 
     // derived objectives need to apply scaling to obj
@@ -94,9 +94,9 @@ struct cluster_data {
     }
 
     friend std::ostream& operator<<(std::ostream& os, const cluster_data& cd) {
-        os << "Cut: " << (cd.top_nnz - cd.uncut) / 2 << ";";
+        os << "Cut: " << (cd.top_nnz - cd.uncut) / 2 << "; ";
         cd.print(os);
-        os << " Labels: " << cd.label_count;
+        os << "; Labels: " << cd.label_count;
         return os;
     }
 
@@ -125,7 +125,7 @@ struct modularity : public cluster_data<matrix_t> {
     }
 
     virtual void print(std::ostream& os) const override {
-        os << " Modularity: " << get_objective() << ";";
+        os << "Modularity: " << get_objective();
     }
 
     virtual ~modularity(){}
@@ -149,7 +149,7 @@ struct constant_potts : public cluster_data<matrix_t> {
     }
 
     virtual void print(std::ostream& os) const override {
-        os << " Constant-Potts: " << get_objective() << ";";
+        os << "Constant-Potts: " << get_objective();
     }
 
     virtual ~constant_potts(){}
@@ -176,7 +176,7 @@ struct normalized_lcc : public cluster_data<matrix_t> {
     }
 
     virtual void print(std::ostream& os) const override {
-        os << " Normalized LambdaCC: " << get_objective() << ";";
+        os << "Normalized LambdaCC: " << get_objective();
     }
 
     virtual ~normalized_lcc(){}

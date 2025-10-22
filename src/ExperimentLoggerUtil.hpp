@@ -133,7 +133,7 @@ public:
 		level_count = _level_count;
 	}
 
-	void log(char* filename, bool first, bool last) {
+	void log(const char* filename, bool first, bool last) {
 		std::ofstream f;
 		f.open(filename, std::ios::app);
 

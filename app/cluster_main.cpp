@@ -46,6 +46,7 @@
 #include "weighted_graph.h"
 #include "parse_args.hpp"
 #include "vertex_weighting.hpp"
+#include "objective_helpers.hpp"
 #include <queue>
 #include <memory>
 
@@ -89,21 +90,6 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
-std::unique_ptr<rfd_t> get_objective(const wg_t wg, const cluster_args args){
-    switch(args.obj_type){
-        case Objective::Modularity:
-            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
-        case Objective::WModularity:
-            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
-        case Objective::NLCC:
-            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
-        case Objective::CPM:
-            return std::make_unique<constant_potts<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
-        default:
-            return std::make_unique<cluster_data<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
-    }
-}
-
 part_vt run_clustering(const wg_t wg,
                     double& obj,
                     const cluster_args args,
@@ -145,7 +131,6 @@ int main(int argc, char **argv) {
 
     const cluster_args args = parse_cluster_args(argc, argv);
     if(!args.valid) return -1;
-    char* metrics_file = nullptr;
 
     Kokkos::initialize(argc, argv);
     //must scope kokkos-related data
@@ -155,11 +140,7 @@ int main(int argc, char **argv) {
         bool uniform_ew = false;
         if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
         std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
-        if(!uniform_ew && (args.obj_type == Objective::Modularity || args.obj_type == Objective::CPM)){
-            std::cout << "WARNING: Edge weights not compatible with objective. Setting edge weights to 1" << std::endl;
-            Kokkos::deep_copy(g.values, 1);
-            uniform_ew = true;
-        }
+        if(!uniform_ew) uniform_ew = sanitize_edge_weights(g, args);
         std::cout << std::endl;
 
         wg_t wg;
@@ -181,8 +162,8 @@ int main(int argc, char **argv) {
                 best_mod = mod;
                 best_clusters = clusters;
             }
-            if(metrics_file != nullptr){
-                experiment.log(metrics_file, i == 0, (i+1) == args.n_trials);
+            if(args.metrics_file.size() > 0){
+                experiment.log(args.metrics_file.c_str(), i == 0, (i+1) == args.n_trials);
             }
         }
 

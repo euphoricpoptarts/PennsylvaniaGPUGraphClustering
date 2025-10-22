@@ -2,6 +2,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 enum class Objective { Modularity, CPM, WModularity, NLCC, Base};
 
@@ -22,9 +23,14 @@ struct base_args {
     bool valid;
 };
 
+struct verify_args : base_args {
+    std::string cluster_file;
+};
+
 struct cluster_args : base_args {
     int n_trials = 1;
     int n_successive_iterations = 0;
+    std::string metrics_file;
 };
 
 struct meme_args : base_args {
@@ -74,6 +80,9 @@ void print_configuration(cluster_args args){
     print_configuration_base(args);
     std::cout << "-- Successive Iteration Count: " << args.n_successive_iterations << std::endl;
     std::cout << "-- Total trial count: " << args.n_trials << std::endl;
+    if(args.metrics_file.size() > 0){
+        std::cout << "-- Metrics Output File: " << args.metrics_file << std::endl;
+    }
 }
 
 void print_configuration(meme_args args){
@@ -82,7 +91,12 @@ void print_configuration(meme_args args){
     std::cout << "-- Time Limit Seconds: " << args.time_limit << std::endl;
 }
 
-std::unordered_map<std::string, std::string> parse_base_args(int argc, char** argv, std::unordered_set<std::string> extra_valid_options, base_args& args){
+void print_configuration(verify_args args){
+    print_configuration_base(args);
+    std::cout << "-- Clusters File: " << args.cluster_file << std::endl;
+}
+
+std::unordered_map<std::string, std::string> parse_base_args(int argc, char** argv, std::vector<std::string> extra_valid_options, base_args& args){
     std::unordered_set<std::string> valid_options = {"-i", "-o", "-objective", "-lambda", "-vtx_weights"};
     valid_options.insert(extra_valid_options.begin(), extra_valid_options.end());
     std::unordered_map<std::string, std::string> required_options = {
@@ -157,7 +171,7 @@ void verify_config(base_args& args){
 }
 
 cluster_args parse_cluster_args(int argc, char** argv){
-    std::unordered_set<std::string> extra_valid_options = {"-trials", "-ex_iters"};
+    std::vector<std::string> extra_valid_options = {"-trials", "-ex_iters", "-metrics"};
     
     cluster_args args;
     std::unordered_map<std::string, std::string> given_options = parse_base_args(argc, argv, extra_valid_options, args);
@@ -171,13 +185,16 @@ cluster_args parse_cluster_args(int argc, char** argv){
         args.n_successive_iterations = std::stoi(given_options["-ex_iters"]);
         if(args.n_successive_iterations < 0) args.n_successive_iterations = 0;
     }
+    if(given_options.count("-metrics") != 0){
+        args.metrics_file = given_options["-metrics"];
+    }
     print_configuration(args);
     verify_config(args);
     return args;
 }
 
 meme_args parse_meme_args(int argc, char** argv){
-    std::unordered_set<std::string> extra_valid_options = {"-pop_size", "-time_limit"};
+    std::vector<std::string> extra_valid_options = {"-pop_size", "-time_limit"};
     
     meme_args args;
     std::unordered_map<std::string, std::string> given_options = parse_base_args(argc, argv, extra_valid_options, args);
@@ -197,6 +214,25 @@ meme_args parse_meme_args(int argc, char** argv){
             args.time_limit = 10;
         }
     }
+    print_configuration(args);
+    verify_config(args);
+    return args;
+}
+
+verify_args parse_verify_args(int argc, char** argv){
+    std::vector<std::string> extra_valid_options = {"-clusters"};
+    
+    verify_args args;
+    std::unordered_map<std::string, std::string> given_options = parse_base_args(argc, argv, extra_valid_options, args);
+    if(!args.valid) return args;
+
+    if(given_options.count("-clusters") == 0){
+        std::cerr << "FATAL ERROR: Required clusters file not given! Please specify with argument '-clusters <cluster file>'" << std::endl;
+        args.valid = false;
+        return args;
+    }
+
+    args.cluster_file = given_options["-clusters"];
     print_configuration(args);
     verify_config(args);
     return args;
