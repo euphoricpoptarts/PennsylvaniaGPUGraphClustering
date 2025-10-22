@@ -106,6 +106,7 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     if(!metadata.is_pattern) {
         if(metadata.is_integer){
             uniform_ew = false;
+            std::cout << "INFO: This file has edge weights." << std::endl;
         } else {
             std::cout << "WARNING: Non-integer edge weights given in matrix market file. This is not currently supported. The given weights will be ignored." << std::endl;
         }

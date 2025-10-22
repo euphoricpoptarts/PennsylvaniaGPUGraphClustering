@@ -2,6 +2,8 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 
+namespace jet_community {
+
 // combines a crs matrix/graph with vertex weights
 template <typename matrix_t>
 struct weighted_graph {
@@ -12,3 +14,5 @@ struct weighted_graph {
     wgt_vt vtx_w;
     bool edge_uniform = true;
 };
+
+}

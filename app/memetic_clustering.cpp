@@ -6,6 +6,8 @@
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.hpp"
+#include "vertex_weighting.hpp"
+#include <memory>
 
 using namespace jet_community;
 using rfd_t = cluster_data<matrix_t>;
@@ -13,6 +15,21 @@ using contracter_t = contracter<matrix_t>;
 using wg_t = weighted_graph<matrix_t>;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
+
+std::unique_ptr<rfd_t> get_objective(const wg_t wg, const base_args args){
+    switch(args.obj_type){
+        case Objective::Modularity:
+            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
+        case Objective::WModularity:
+            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
+        case Objective::NLCC:
+            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
+        case Objective::CPM:
+            return std::make_unique<constant_potts<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
+        default:
+            return std::make_unique<cluster_data<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
+    }
+}
 
 part_vt intersection_cluster(part_vt c1, part_vt c2, int l2){
 
@@ -87,21 +104,16 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
     return cut1 + cut2;
 }
 
-part_vt meme_cluster(matrix_t g,
-                    wgt_view_t vweights,
-                    int pop_size,
-                    int time_limit) {
+part_vt meme_cluster(wg_t wg, const meme_args args) {
 
-    modularity<matrix_t> mod_objective(g, vweights, 1.0, true);
-    rfd_t& rfd = mod_objective;
-    mem_t mem(g, rfd);
-    wg_t wg;
-    wg.mtx = g;
-    wg.vtx_w = vweights;
-    wg.edge_uniform = true;
+    std::unique_ptr<rfd_t> objective = get_objective(wg, args);
+    rfd_t& rfd = *objective;
+    mem_t mem(wg.mtx, rfd);
     std::vector<clustering> pop;
     ExperimentLoggerUtil<value_t> dummy;
     std::cout << std::setprecision(9);
+    int pop_size = args.pop_size;
+    int time_limit = args.time_limit;
     for(int i = 0; i < pop_size; i++){
         part_vt dummy_constraint;
         part_vt c = cm_t::leiden_part<false>(mem, wg, rfd, dummy, dummy_constraint);
@@ -111,14 +123,14 @@ part_vt meme_cluster(matrix_t g,
         y.labels = rfd.label_count;
         std::cout << "Adding clustering with obj: " << rfd.get_objective() << std::endl;
         pop.push_back(y);
-        rfd.reset(g, vweights);
+        rfd.reset(wg.mtx, wg.vtx_w);
     }
 
     std::random_device r;
     std::default_random_engine e1(r());
     std::uniform_int_distribution<int> uniform_dist1(0, pop_size - 1);
     std::uniform_int_distribution<int> uniform_dist2(0, pop_size - 2);
-    std::uniform_int_distribution<int> uniform_dist3(0, g.nnz());
+    std::uniform_int_distribution<int> uniform_dist3(0, wg.mtx.nnz());
     double best = 0;
     int e = 0;
     Kokkos::Timer t;
@@ -152,12 +164,12 @@ part_vt meme_cluster(matrix_t g,
             // replace worst with c3
             int am = -1;
             double obj_max = rfd.get_objective();
-            double min_diff = g.nnz();
+            value_t min_diff = std::numeric_limits<value_t>::max();
             for(int p = 0; p < pop_size; p++){
                 double obj = pop[p].obj;
                 if(obj < obj_max){
                     // value_t diff = uniform_dist3(e1);
-                    value_t diff = get_cut_diff(g, c3, pop[p].clusters, mem);
+                    value_t diff = get_cut_diff(wg.mtx, c3, pop[p].clusters, mem);
                     if(diff < min_diff){
                         min_diff = diff;
                         am = p;
@@ -172,8 +184,7 @@ part_vt meme_cluster(matrix_t g,
                 min_diff = 0;
             }
             std::cout << "; Min diff: " << min_diff << std::endl;
-            // std::cout << std::endl;
-            rfd.reset(g, vweights);
+            rfd.reset(wg.mtx, wg.vtx_w);
         }
         std::cout << "Epoch " << e << " best objective: " << best << std::endl;
         e++;
@@ -191,34 +202,10 @@ part_vt meme_cluster(matrix_t g,
     return pop[am].clusters;
 }
 
-void degree_weighting(const matrix_t& g, wgt_view_t vweights){
-    Kokkos::parallel_for("set v weights", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
-        vweights(i) = g.graph.row_map(i + 1) - g.graph.row_map(i);
-    });
-}
-
 int main(int argc, char **argv) {
 
-    if (argc < 4) {
-        std::cerr << "Insufficient number of args provided" << std::endl;
-        std::cerr << "Usage: " << argv[0] << " <graph_file> <pop size> <time limit in seconds> <optional clustering_output_filename>" << std::endl;
-        return -1;
-    }
-    char *filename = argv[1];
-    int pop_size = atoi(argv[2]);
-    if(pop_size < 10){
-        std::cout << "WARNING: Population size given as " << pop_size << " < 10. Setting population size to 10." << std::endl;
-        pop_size = 10;
-    }
-    int time_limit = atoi(argv[3]);
-    if(time_limit < 10){
-        std::cout << "WARNING: Time limit given as " << time_limit << "s < 10s. Setting time limit to 10s." << std::endl;
-        time_limit = 10;
-    }
-    char *clusters_file = nullptr;
-    if(argc >= 5){
-        clusters_file = argv[4];
-    }
+    const meme_args args = parse_meme_args(argc, argv);
+    if(!args.valid) return -1;
 
     Kokkos::initialize(argc, argv);
     //must scope kokkos-related data
@@ -226,17 +213,25 @@ int main(int argc, char **argv) {
     {
         matrix_t g;
         bool uniform_ew = false;
-        if(!load_graph(g, uniform_ew, filename)) return -1;
-        std::cout << "vertices: " << g.numRows() << "; edges: " << g.nnz() / 2 << std::endl;
-        wgt_view_t vweights("vertex weights", g.numRows());
-        degree_weighting(g, vweights);
-        //Kokkos::deep_copy(vweights, 1);
+        if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
+        std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
+        if(!uniform_ew && (args.obj_type == Objective::Modularity || args.obj_type == Objective::CPM)){
+            std::cout << "WARNING: Edge weights not compatible with objective. Setting edge weights to 1" << std::endl;
+            Kokkos::deep_copy(g.values, 1);
+            uniform_ew = true;
+        }
+        std::cout << std::endl;
 
-        part_vt best_clusters = meme_cluster(g, vweights, pop_size, time_limit);
-        if(clusters_file != nullptr){
-            std::cout << "Writing best clustering to " << clusters_file << std::endl;
-            write_part(best_clusters, clusters_file);
-        } 
+        wg_t wg;
+        wg.mtx = g;
+        wg.vtx_w = get_vtx_weights(g, args);
+        wg.edge_uniform = uniform_ew;
+
+        part_vt best_clusters = meme_cluster(wg, args);
+        if(args.output_file.size() > 0){
+            std::cout << "Writing best clustering to " << args.output_file << std::endl;
+            write_part(best_clusters, args.output_file.c_str());
+        }
     }
     Kokkos::finalize();
 
