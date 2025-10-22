@@ -239,7 +239,7 @@ public:
         });
     }
 
-    template <bool uniform>
+    template <bool top>
     static part_vt coarsen_leidenR(const wg_t wg,
         const part_vt& constraint,
         mem_t& mem,
@@ -266,7 +266,7 @@ public:
         });
 
         std::random_device rd;
-        if(uniform){
+        if(top){
             // randomizations is only strictly necessary on top level graph
             // randomization on successive levels is empirically detrimental to objective quality
             ordinal_t seed = rd();

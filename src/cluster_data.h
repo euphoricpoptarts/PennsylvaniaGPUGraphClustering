@@ -163,8 +163,8 @@ struct normalized_lcc : public cluster_data<matrix_t> {
 
     scalar_t g_deg = 0;
 
-    normalized_lcc(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
-        if(uniform) g_deg = g.nnz();
+    normalized_lcc(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool edge_uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+        if(edge_uniform) g_deg = g.nnz();
         else g_deg = cluster_data<matrix_t>::sum(g.values);
         uint64_t v_total = cluster_data<matrix_t>::sum(wdeg);
         double denom = static_cast<double>(v_total * v_total);
