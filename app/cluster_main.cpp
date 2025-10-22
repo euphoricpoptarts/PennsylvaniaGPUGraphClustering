@@ -93,9 +93,9 @@ std::unique_ptr<rfd_t> get_objective(const wg_t wg, const cluster_args args){
         case Objective::Modularity:
             return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
         case Objective::WModularity:
-            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, false);
+            return std::make_unique<modularity<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
         case Objective::NLCC:
-            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, true);
+            return std::make_unique<normalized_lcc<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier, wg.edge_uniform);
         case Objective::CPM:
             return std::make_unique<constant_potts<matrix_t>>(wg.mtx, wg.vtx_w, args.lambda_multiplier);
         default:
@@ -105,7 +105,7 @@ std::unique_ptr<rfd_t> get_objective(const wg_t wg, const cluster_args args){
 
 part_vt run_clustering(const wg_t wg,
                     double& obj,
-                    cluster_args args,
+                    const cluster_args args,
                     ExperimentLoggerUtil<value_t>& experiment) {
     std::unique_ptr<rfd_t> rfd = get_objective(wg, args);
     mem_t mem(wg.mtx, *rfd);
@@ -163,15 +163,12 @@ wgt_view_t get_vtx_weights(const matrix_t g, const cluster_args args){
         wgt_view_t vweights(Kokkos::ViewAllocateWithoutInitializing("vertex weights"), g.numRows());
         switch (args.obj_type){
             case Objective::Modularity:
-                std::cout << "Degree vertex weighting" << std::endl;
                 degree_weighting(g, vweights);
                 break;
             case Objective::WModularity:
-                std::cout << "Weighted-Degree vertex weighting" << std::endl;
                 weighted_degree_weighting(g, vweights);
                 break;
             default:
-                std::cout << "Uniform unit vertex weighting" << std::endl;
                 Kokkos::deep_copy(vweights, 1);
         }
         return vweights;
@@ -180,7 +177,7 @@ wgt_view_t get_vtx_weights(const matrix_t g, const cluster_args args){
 
 int main(int argc, char **argv) {
 
-    cluster_args args = parse_args(argc, argv);
+    const cluster_args args = parse_args(argc, argv);
     if(!args.valid) return -1;
     char* metrics_file = nullptr;
 
@@ -192,10 +189,17 @@ int main(int argc, char **argv) {
         bool uniform_ew = false;
         if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
         std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
+        if(!uniform_ew && (args.obj_type == Objective::Modularity || args.obj_type == Objective::CPM)){
+            std::cout << "WARNING: Edge weights not compatible with objective. Setting edge weights to 1" << std::endl;
+            Kokkos::deep_copy(g.values, 1);
+            uniform_ew = true;
+        }
+        std::cout << std::endl;
 
         wg_t wg;
         wg.mtx = g;
         wg.vtx_w = get_vtx_weights(g, args);
+        wg.edge_uniform = uniform_ew;
         part_vt best_clusters;
         double best_mod = -std::numeric_limits<double>::infinity();
         Kokkos::fence();
@@ -216,7 +220,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        std::cout << std::setprecision(9) << "Best modularity found: " << best_mod << std::endl;
+        std::cout << std::setprecision(9) << "Best objective found: " << best_mod << std::endl;
         if(args.output_file.size() > 0){
             std::cout << "Writing best clustering to " << args.output_file << std::endl;
             write_part(best_clusters, args.output_file.c_str());

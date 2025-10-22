@@ -98,6 +98,7 @@ part_vt meme_cluster(matrix_t g,
     wg_t wg;
     wg.mtx = g;
     wg.vtx_w = vweights;
+    wg.edge_uniform = true;
     std::vector<clustering> pop;
     ExperimentLoggerUtil<value_t> dummy;
     std::cout << std::setprecision(9);

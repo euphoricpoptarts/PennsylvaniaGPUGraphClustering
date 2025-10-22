@@ -302,6 +302,7 @@ wg_t build_coarse_graph(const wg_t curr_level,
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
     wg_t next_level;
     next_level.mtx = gc;
+    next_level.edge_uniform = false;
     return next_level;
 }
 

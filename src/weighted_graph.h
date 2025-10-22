@@ -10,4 +10,5 @@ struct weighted_graph {
 
     matrix_t mtx;
     wgt_vt vtx_w;
+    bool edge_uniform = true;
 };

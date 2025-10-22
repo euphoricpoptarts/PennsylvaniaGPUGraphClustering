@@ -62,10 +62,10 @@ public:
             wg_t c = levels[levels.size() - 1];
             // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
-            if(levels.size() == 1) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
+            if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
             else local_mover.template local_move<false, false>(c, part, rfd, false, mem, part);
             if(old_obj == rfd.obj){
-                if(levels.size() == 1) local_mover.template local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
+                if(c.edge_uniform) local_mover.template local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
                 else local_mover.template local_move_strict<false, false>(c, part, rfd, false, mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
@@ -82,7 +82,7 @@ public:
                 Kokkos::Timer t;
                 contracter_t contracter;
                 wg_t next_level;
-                if(levels.size() == 1) next_level = contracter.template build_coarse_graph<true>(c, coarse_map, coarse_vtx_count, mem);
+                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true>(c, coarse_map, coarse_vtx_count, mem);
                 else next_level = contracter.template build_coarse_graph<false>(c, coarse_map, coarse_vtx_count, mem);
                 next_level.vtx_w = wgt_view_t("weighted degree 2", coarse_vtx_count);
                 coarsen_vtx_w(c.vtx_w, next_level.vtx_w, coarse_map);
@@ -118,7 +118,7 @@ public:
                 fine_part(x) = coarse_part(fine_part(x));
             });
     #ifdef LEIDEN_PLUS
-            if(i == 0) local_mover.template local_move<true, false>(c, fine_part, rfd, false, mem, part);
+            if(c.edge_uniform) local_mover.template local_move<true, false>(c, fine_part, rfd, false, mem, part);
             else local_mover.template local_move<false, false>(c, fine_part, rfd, false, mem, part);
     #endif
         }
@@ -141,11 +141,11 @@ public:
             Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = x;
             });
-            if(levels.size() == 1) local_mover.template local_move<true, constrained>(c, part, rfd, true, mem, constraint);
+            if(c.edge_uniform) local_mover.template local_move<true, constrained>(c, part, rfd, true, mem, constraint);
             else local_mover.template local_move<false, constrained>(c, part, rfd, true, mem, constraint);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
-                if(levels.size() == 1) local_mover.template local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
+                if(c.edge_uniform) local_mover.template local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
                 else local_mover.template local_move_strict<false, constrained>(c, part, rfd, true, mem, constraint);
             }
             parts.push_back(part);
@@ -153,7 +153,7 @@ public:
                 Kokkos::Timer t;
                 contracter_t contracter;
                 wg_t next_level;
-                if(levels.size() == 1) next_level = contracter.template build_coarse_graph<true>(c, part, rfd.label_count, mem);
+                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true>(c, part, rfd.label_count, mem);
                 else next_level = contracter.template build_coarse_graph<false>(c, part, rfd.label_count, mem);
                 wgt_view_t td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
                 next_level.vtx_w = wgt_view_t("next level vtx weights", rfd.label_count);
@@ -200,7 +200,7 @@ public:
             Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = coarse_part(part(x));
             });
-            if(i == 0) local_mover.template local_move<true, false>(c, part, rfd, false, mem, constraint);
+            if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, false, mem, constraint);
             else local_mover.template local_move<false, false>(c, part, rfd, false, mem, constraint);
         }
 

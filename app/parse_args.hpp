@@ -36,6 +36,19 @@ void print_configuration(cluster_args args){
     std::cout << "Program configuration: " << std::endl;
     std::cout << "-- Input Graph File: " << args.graph_file << std::endl;
     if(args.vw_file.size() > 0) std::cout << "-- Input Vertex Weights File: " << args.vw_file << std::endl;
+    else {
+        std::cout << "-- Vertex Weighting Method: ";
+        switch(args.obj_type){
+            case Objective::Modularity:
+                std::cout << "Degree" << std::endl;
+                break;
+            case Objective::WModularity:
+                std::cout << "Weighted Degree" << std::endl;
+                break;
+            default:
+                std::cout << "Unit Uniform" << std::endl;
+        }
+    }
     std::cout << "-- Successive Iteration Count: " << args.n_successive_iterations << std::endl;
     std::cout << "-- Total trial count: " << args.n_trials << std::endl;
     std::cout << "-- Objective Type: ";
