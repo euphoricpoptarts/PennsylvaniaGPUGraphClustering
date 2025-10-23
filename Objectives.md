@@ -22,7 +22,7 @@ Not compatible with custom vertex weights.
 Not compatible with custom vertex weights.  
 **NLCC**: Use the Normalized LambdaCC objective. $\lambda = \frac{w(E)}{w(V)^2}$. Does not override edge weights.
 Compatible with custom vertex weights.
-Uses unit vertex weights if custom vertex weights are not given.
+Uses unit vertex weights if custom vertex weights are not given.  
 **LCC**: Use the Base LambdaCC objective. $\lambda = 1$. Does not override edge weights.
 Compatible with custom vertex weights.
 Uses unit vertex weights if custom vertex weights are not given.  
