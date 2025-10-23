@@ -20,7 +20,7 @@ Initial clustering pool is generated with pLeiden+.
 Recombination is performed by pLouvain.  
 Mutation operator is performed with 5 iterations of pLeiden+.  
 Mutation operator is performed on the output of the recombination operator.  
-Quality is generally superior to VieClus.
+Quality is generally superior to VieClus in the same amount of time.
 
 #### Helpers
 **verify_obj**: Takes a graph file and a clustering file as defined above as input. Computes the modularity of the given clustering on the given graph.
