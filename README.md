@@ -34,7 +34,6 @@ Quality is generally superior to VieClus.
 **-objective \<Objective Name\>**: Specify the objective which will be optimized/calculated. See Objectives.md for more detail. Default: Mod (Modularity)  
 **-lambda \<Double or float\>**: Specify the lambda modifier for the objective. See Objectives.md for more detail. Default: 1.0  
 **-vtx_weights \<Vertex Weights File\>**: Specify custom vertex weights for the objective. See Objectives.md for more detail. Default: Depends on objective. Can't be used with certain objectives.
-**Clustering Output File**:
 ###### Optional For pLouvain, pLeiden, pLeiden+, and meme
 **-o \<Output Clusters File\>** Writes the clustering, numbered `0` to `c-1` for `c` clusters, to the given file. Line `x` gives the cluster to which vertex `x` belongs. Default: None
 ###### Optional for pLouvain, pLeiden, and pLeiden+
