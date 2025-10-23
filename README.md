@@ -10,20 +10,9 @@ Our pLeiden and pLeiden+ implementations are the first to provide the Leiden alg
 ### Executables
 
 #### Clustering Programs
-Each clustering program has 1 required parameter and 3 optional parameters.
-You will invoke each as below:  
-`./build/app/<program> <required graph file> <optional additional iteration count> <optional trial count> <optional clustering output file>`  
-
 **pLouvain**: Run the Louvain+ algorithm. Choose this one for fast, high-quality clustering.  
 **pLeiden**: Run the Leiden algorithm. Choose this one for intra-cluster connectivity guarantees, but lower quality than pLouvain or pLeiden+.  
 **pLeiden+**: Run the Leiden+ algorithm. Use this one with multiple iterations for highest-quality. Intra-cluster connectivity guarantees are delayed until algorithm encounters a stable iteration.  
-Each program currently only optimizes for modularity.
-
-##### Parameters
-**Graph File**: A graph represented in the Metis file format or the Matrix Market file format. Files ending in `".mtx"` will be interpreted as Matrix Market files, all other file extensions will be interpreted as Metis files.  
-**Additional Iteration Count**: Applies the program successively on its own output for the given iteration count.  
-**Trial Count**: Performs this number of clustering trials, and returns the best clustering.  
-**Clustering Output File**: Writes the clustering, numbered `0` to `c-1` for `c` clusters, to the given file. Line `x` gives the cluster to which vertex `x` belongs.
 
 #### Evolutionary/Memetic Clustering
 **meme**: Uses a memetic clustering algorithm inspired by VieClus.  
@@ -31,22 +20,33 @@ Initial clustering pool is generated with pLeiden+.
 Recombination is performed by pLouvain.  
 Mutation operator is performed with 5 iterations of pLeiden+.  
 Mutation operator is performed on the output of the recombination operator.  
-Quality is generally superior to VieClus.  
-Invoke as:  
-`./build/app/meme <required graph file> <required pool size> <required time limit in seconds> <optional clustering output file>`
+Quality is generally superior to VieClus.
 
 #### Helpers
-**calc_mod**: Takes a graph file and a clustering file as defined above as input. Computes the modularity of the given clustering on the given graph. Invoke as below:  
-`./build/app/calc_mod <required graph file> <required clustering file>`
+**verify_obj**: Takes a graph file and a clustering file as defined above as input. Computes the modularity of the given clustering on the given graph.
+
+##### Parameters
+###### Required For All
+**-i <Graph File>**: A graph represented in the Metis file format or the Matrix Market file format. Files ending in `".mtx"` will be interpreted as Matrix Market files, all other file extensions will be interpreted as Metis files.
+###### Required for verify_obj
+**-clusters <Cluster Input File>**: A file containing a clustering of the graph, numbered `0` to `c-1` for `c` clusters. Line `x` gives the cluster to which vertex `x` belongs.
+###### Optional For All
+**-objective <Objective Name>**: Specify the objective which will be optimized/calculated. See Objectives.md for more detail. Default: Mod (Modularity)  
+**-lambda <Double or float>**: Specify the lambda modifier for the objective. See Objectives.md for more detail. Default: 1.0  
+**-vtx_weights <Vertex Weights File>**: Specify custom vertex weights for the objective. See Objectives.md for more detail. Default: Depends on objective. Can't be used with certain objectives.
+**Clustering Output File**:
+##### Optional For pLouvain, pLeiden, pLeiden+, and meme
+**-o <Output Clusters File>** Writes the clustering, numbered `0` to `c-1` for `c` clusters, to the given file. Line `x` gives the cluster to which vertex `x` belongs. Default: None
+##### Optional for pLouvain, pLeiden, and pLeiden+
+**-ex_iters <Integer>**: Applies the program successively on its own output for the given iteration count. Default: 0  
+**-trials <Integer>**: Performs this number of clustering trials, and returns the best clustering. Default: 1  
+**-metrics <Output Metrics File>**: Dump various timing data in json format to file. Default: None
 
 ### Library
 There is currently no library available to programmatically invoke our clustering methods.
 
 ### Input Format
-We ignore vertex weights within metis graph files.  
-Programs may not work as expected if edge weights are given in metis format.  
-We ignore edge weights in matrix market files.  
-Robust support for weighted edges is forthcoming.
+Our parser fails if it finds vertex weights within metis graph files. Please specify vertex weights with **-vtx_weights** parameter.
 
 ## Comparison versus State of the Art Parallel Clustering Algorithms
 The below images compare our programs with the following state-of-the-art competitors:  
@@ -71,11 +71,8 @@ pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
 Networkit Leiden is off the chart at -0.415.  
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
-## Planned Features
-Support for user-specified LambdaCC objective function configurations.
-
-### Possible Features
+## Possible Features
 Python wrapper.  
 C++ library.
 
-If you are interested in these potential features, please open an issue to let us know.
+If you are interested in these potential features or have any requests, please open an issue to let us know.
