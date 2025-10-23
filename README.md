@@ -61,6 +61,9 @@ Cugraph Leiden
 GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
 CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
 
+Tests are ran on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
+https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
+
 ### Runtime Comparison
 ![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
 pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
@@ -69,6 +72,14 @@ pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
 ![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
 Networkit Leiden is off the chart at -0.415.  
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
+
+### Memetic Modularity Comparison
+![Comparison of our Memetic Clustering Algorithm vs VieClus](images/memetic_modularity_comparison-1.png)
+Our memetic clustering algorithm is run for 1 minute on a B200 GPU, with a population size of 100.  
+VieClus is run on an AMD Epyc 9655 CPU with a time limit of 30 minutes, and 16-24 processes depending on memory usage.  
+As each VieClus process indepently runs a Louvain-like clustering algorithm (among other tasks), the available system memory severely constrains the number of processes that may be used.  
+Other VieClus settings are left as default.  
+Our memetic algorithm can produce better modularity-valued clusterings on several dimacs10 challenge graphs in 10 minutes than VieClus can in 16 hours.
 
 ## Possible Features
 Python wrapper.  

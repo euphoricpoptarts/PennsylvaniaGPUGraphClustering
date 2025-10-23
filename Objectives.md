@@ -2,7 +2,7 @@
 
 ## Overview of LambdaCC Objective Functions
 
-Many of the most common objective functions for graph clustering can be expressed by the following equation.
+Many of the most common objective functions for graph clustering can be expressed by the following equation:
 
 ```math
 \lambda CC(C) = \sum_{C_i \in C} \sum_{u,v \in C_i} (w(u,v) - \lambda w(u)w(v))
