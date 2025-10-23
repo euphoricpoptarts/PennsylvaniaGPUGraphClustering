@@ -40,4 +40,4 @@ It is not limited to these objectives, as you can use it to rescale the $\lambda
 ## Custom Vertex Weights
 If you wish to use the Normalized LambdaCC or Base LambdaCC objectives, you can specify a file with custom vertex weights.  
 This file should have one integer per line, with $|V|$ lines. The weight for vertex $x$ should appear on line $x$.  
-There may be problems if the sum of vertex weights exceeds `INT_MAX`.
+There WILL be problems if the sum of vertex weights exceeds `INT_MAX`.
