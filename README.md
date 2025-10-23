@@ -77,7 +77,7 @@ pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competit
 ![Comparison of our Memetic Clustering Algorithm vs VieClus](images/memetic_modularity_comparison-1.png)
 Our memetic clustering algorithm is run for 1 minute on a B200 GPU, with a population size of 100.  
 VieClus is run on an AMD Epyc 9655 CPU with a time limit of 30 minutes, and 16-24 processes depending on memory usage.  
-As each VieClus process indepently runs a Louvain-like clustering algorithm (among other tasks), the available system memory severely constrains the number of processes that may be used.  
+As each VieClus process independently runs a Louvain-like clustering algorithm (among other tasks), the available system memory severely constrains the number of processes that may be used.  
 Other VieClus settings are left as default.  
 Our memetic algorithm can produce better modularity-valued clusterings on several dimacs10 challenge graphs in 10 minutes than VieClus can in 16 hours.
 
