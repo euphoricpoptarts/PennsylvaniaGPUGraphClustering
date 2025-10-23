@@ -25,22 +25,22 @@ Quality is generally superior to VieClus.
 #### Helpers
 **verify_obj**: Takes a graph file and a clustering file as defined above as input. Computes the modularity of the given clustering on the given graph.
 
-##### Parameters
-###### Required For All
+#### Parameters
+##### Required For All
 **-i \<Graph File\>**: A graph represented in the Metis file format or the Matrix Market file format. Files ending in `".mtx"` will be interpreted as Matrix Market files, all other file extensions will be interpreted as Metis files.
-###### Required for verify_obj
+##### Required for verify_obj
 **-clusters \<Cluster Input File\>**: A file containing a clustering of the graph, numbered `0` to `c-1` for `c` clusters. Line `x` gives the cluster to which vertex `x` belongs.
-###### Optional For All
+##### Optional For All
 **-objective \<Objective Name\>**: Specify the objective which will be optimized/calculated. See Objectives.md for more detail. Default: Mod (Modularity)  
 **-lambda \<Double or float\>**: Specify the lambda modifier for the objective. See Objectives.md for more detail. Default: 1.0  
 **-vtx_weights \<Vertex Weights File\>**: Specify custom vertex weights for the objective. See Objectives.md for more detail. Default: Depends on objective. Can't be used with certain objectives.
-###### Optional For pLouvain, pLeiden, pLeiden+, and meme
+##### Optional For pLouvain, pLeiden, pLeiden+, and meme
 **-o \<Output Clusters File\>** Writes the clustering, numbered `0` to `c-1` for `c` clusters, to the given file. Line `x` gives the cluster to which vertex `x` belongs. Default: None
-###### Optional for pLouvain, pLeiden, and pLeiden+
+##### Optional for pLouvain, pLeiden, and pLeiden+
 **-ex_iters \<Integer\>**: Applies the program successively on its own output for the given iteration count. Default: 0  
 **-trials \<Integer\>**: Performs this number of clustering trials, and returns the best clustering. Default: 1  
 **-metrics \<Output Metrics File\>**: Dump various timing data in json format to file. Default: None
-###### Optional for meme
+##### Optional for meme
 **-pop_size \<Integer\>**: Population size of evolutionary method. Default: 10. Minimum: 10  
 **-time_limit \<Integer\>**: Time limit of evolutionary method in seconds. Default: 10. Minimum: 10
 
