@@ -119,61 +119,63 @@ part_vt meme_cluster(wg_t wg, const meme_args args) {
     std::uniform_int_distribution<int> uniform_dist3(0, wg.mtx.nnz());
     double best = 0;
     int e = 0;
+    int curr_iter = 0;
     Kokkos::Timer t;
     while(t.seconds() < time_limit) {
-        for(int i = 0; i < pop_size; i++){
-            int choice1 = uniform_dist1(e1);
-            int choice2 = uniform_dist2(e1);
+        int choice1 = uniform_dist1(e1);
+        int choice2 = uniform_dist2(e1);
+        choice2 = (choice1 + choice2) % pop_size;
+        int p1 = pop[choice1].obj > pop[choice2].obj ? choice1 : choice2;
+        int p2 = p1;
+        while(p2 == p1){
+            choice1 = uniform_dist1(e1);
+            choice2 = uniform_dist2(e1);
             choice2 = (choice1 + choice2) % pop_size;
-            int p1 = pop[choice1].obj > pop[choice2].obj ? choice1 : choice2;
-            int p2 = p1;
-            while(p2 == p1){
-                choice1 = uniform_dist1(e1);
-                choice2 = uniform_dist2(e1);
-                choice2 = (choice1 + choice2) % pop_size;
-                p2 = pop[choice1].obj > pop[choice2].obj ? choice1 : choice2;
-            }
-            clustering c1 = pop[p1]; // choose parent 1
-            clustering c2 = pop[p2]; // choose parent 2
-            part_vt constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
-            // create offspring
-            part_vt c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
-            std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
-            for(int x = 0; x < 5; x++){
-                c3 = cm_t::leiden_part<true>(mem, wg, rfd, dummy, c3);
-            }
-            std::cout << "; Post leiden obj: " << rfd.get_objective();
-            if(rfd.get_objective() > best){
-                best = rfd.get_objective();
-            }
+            p2 = pop[choice1].obj > pop[choice2].obj ? choice1 : choice2;
+        }
+        clustering c1 = pop[p1]; // choose parent 1
+        clustering c2 = pop[p2]; // choose parent 2
+        part_vt constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
+        // create offspring
+        part_vt c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
+        std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
+        for(int x = 0; x < 5; x++){
+            c3 = cm_t::leiden_part<true>(mem, wg, rfd, dummy, c3);
+        }
+        std::cout << "; Post leiden obj: " << rfd.get_objective();
+        if(rfd.get_objective() > best){
+            best = rfd.get_objective();
+        }
 
-            // replace worst with c3
-            int am = -1;
-            double obj_max = rfd.get_objective();
-            value_t min_diff = std::numeric_limits<value_t>::max();
-            for(int p = 0; p < pop_size; p++){
-                double obj = pop[p].obj;
-                if(obj < obj_max){
-                    // value_t diff = uniform_dist3(e1);
-                    value_t diff = get_cut_diff(wg.mtx, c3, pop[p].clusters, mem);
-                    if(diff < min_diff){
-                        min_diff = diff;
-                        am = p;
-                    }
+        // replace worst with c3
+        int am = -1;
+        double obj_max = rfd.get_objective();
+        value_t min_diff = std::numeric_limits<value_t>::max();
+        for(int p = 0; p < pop_size; p++){
+            double obj = pop[p].obj;
+            if(obj < obj_max){
+                // value_t diff = uniform_dist3(e1);
+                value_t diff = get_cut_diff(wg.mtx, c3, pop[p].clusters, mem);
+                if(diff < min_diff){
+                    min_diff = diff;
+                    am = p;
                 }
             }
-            if(am != -1){
-                pop[am].clusters = c3;
-                pop[am].obj = rfd.get_objective();
-                pop[am].labels = rfd.label_count;
-            } else {
-                min_diff = 0;
-            }
-            std::cout << "; Min diff: " << min_diff << std::endl;
-            rfd.reset(wg.mtx, wg.vtx_w);
         }
-        std::cout << "Epoch " << e << " best objective: " << best << std::endl;
-        e++;
+        if(am != -1){
+            pop[am].clusters = c3;
+            pop[am].obj = rfd.get_objective();
+            pop[am].labels = rfd.label_count;
+        } else {
+            min_diff = 0;
+        }
+        std::cout << "; Min diff: " << min_diff << std::endl;
+        rfd.reset(wg.mtx, wg.vtx_w);
+        if(++curr_iter >= pop_size) {
+            std::cout << "Epoch " << e << " best objective: " << best << std::endl;
+            e++;
+            curr_iter = 0;
+        }
     }
     int am = -1;
     double obj_max = 0;
