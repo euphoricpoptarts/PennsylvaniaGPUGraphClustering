@@ -15,7 +15,7 @@ Our pLeiden and pLeiden+ implementations are the first to provide the Leiden alg
 **pLeiden+**: Run the Leiden+ algorithm. Use this one with multiple iterations for highest-quality. Intra-cluster connectivity guarantees are delayed until algorithm encounters a stable iteration.  
 
 #### Evolutionary/Memetic Clustering
-**meme**: Uses a memetic clustering algorithm inspired by VieClus.  
+**meme**: Uses a memetic clustering algorithm inspired by VieClus (https://github.com/VieClus/VieClus).  
 Initial clustering pool is generated with pLeiden+.  
 Recombination is performed by pLouvain.  
 Mutation operator is performed with 5 iterations of pLeiden+.  
@@ -53,10 +53,10 @@ v-Louvain: https://github.com/puzzlef/louvain-communities-cuda
 GALA: https://github.com/LinXi-lx/GALA  
 GVE-Louvain: https://github.com/puzzlef/louvain-communities-openmp  
 GVE-Leiden: https://github.com/puzzlef/leiden-communities-openmp  
-Networkit Louvain  
-Networkit Leiden  
-Cugraph Louvain  
-Cugraph Leiden
+Networkit Louvain: https://networkit.github.io/  
+Networkit Leiden: https://networkit.github.io/  
+Cugraph Louvain: https://github.com/rapidsai/cugraph  
+Cugraph Leiden: https://github.com/rapidsai/cugraph
 
 GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
 CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
