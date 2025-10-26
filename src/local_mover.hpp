@@ -311,7 +311,7 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
         ordinal_t i = large_vtx(t.league_rank());
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        float w = wg.vtx_w(i);
+        scalar_t w = wg.vtx_w(i);
         float multi = w*penalty_mod;
         float igain = save_gains(i);
         ordinal_t hi = hash(i);
@@ -343,7 +343,7 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
         ordinal_t i = small_vtx(x);
         ordinal_t best = dest_part(i);
         ordinal_t p = part(i);
-        float w = wg.vtx_w(i);
+        scalar_t w = wg.vtx_w(i);
         float multi = w*penalty_mod;
         float igain = save_gains(i);
         ordinal_t hi = hash(i);
@@ -412,12 +412,12 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
             return;
         }
         ordinal_t best = NO_MOVE;
-        float w = vtx_w(i);
+        scalar_t w = vtx_w(i);
         float multi = w*penalty_mod;
         ordinal_t p = part(i);
         float p_conn = pvals(i) - (total_deg(p) - w)*multi;
         // b_conn must be at least this value to pass filter
-        float b_conn = p_conn - filter_ratio*(p_conn);
+        float b_conn = p_conn*(1.0 - filter_ratio);
         if(p_conn < 0) b_conn = 0;
         edge_offset_t start = c_graph.graph.row_map(i);
         edge_offset_t end = c_graph.graph.row_map(i+1);
@@ -429,6 +429,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
                 if(constrained && constraint(px) != constraint(p)) continue;
                 float j_conn = j_val - static_cast<float>(total_deg(px))*multi;
                 if(j_conn >= b_conn){
+                    // this is not deterministic unless the case j_conn == b_conn is handled properly
                     b_conn = j_conn;
                     best = px;
                 }
@@ -436,14 +437,12 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         }
         float gain = OBJ_MIN;
         if(best != NO_MOVE){
-            // vertices must pass this filter in order to be considered further
             gain = b_conn - p_conn;
         } else if(p_conn < 0){
             gain = -p_conn;
             best = NEW_PART;
         }
         save_gains(i) = gain;
-        //a vertex is not considered further if best == p
         dest_part(i) = best;
     });
     if(!truncated){
@@ -453,14 +452,14 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
                 return;
             }
             ordinal_t team_size = t.team_size();
-            float w = vtx_w(i);
+            scalar_t w = vtx_w(i);
             float multi = w*penalty_mod;
             edge_offset_t start = c_graph.graph.row_map(i);
             edge_offset_t end = c_graph.graph.row_map(i+1);
             ordinal_t p = part(i);
             float p_conn = pvals(i) - (total_deg(p) - w)*multi;
             // j_conn must be at least this value to pass filter
-            float maxl = p_conn - filter_ratio*(p_conn);
+            float maxl = p_conn*(1.0 - filter_ratio);
             if(p_conn < 0) maxl = 0;
             ordinal_t argmax = NO_MOVE;
             //finds potential destination as most connected part excluding p
