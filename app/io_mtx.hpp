@@ -74,6 +74,100 @@ bool is_new_entry(std::vector<uint64_t>& htable, uint64_t x){
     }
 }
 
+matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src, std::vector<ordinal_t>& dst, std::vector<value_t>& val, bool symmetric, bool uniform_ew){
+    int self_loops = 0;
+    int zero_weight = 0;
+    edge_offset_t edges_read = src.size();
+    edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row_map"), n + 1);
+    edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
+    Kokkos::deep_copy(row_map_m, 0);
+    std::vector<uint64_t> unique_edges;
+    if(!symmetric){
+        size_t cap = 2;
+        while(cap < (size_t)edges_read) cap <<= 1;
+        if(cap < (size_t)(1.1*edges_read)) cap <<= 1;
+        // hashtable expects a power of 2 capacity
+        unique_edges.assign(cap, HASH_EMPTY);
+    }
+    // count edges per vertex
+    for(edge_offset_t j = 0; j < edges_read; j++){
+        ordinal_t u = src[j];
+        ordinal_t v = dst[j];
+        if(u == v){
+            self_loops++;
+            continue;
+        }
+        if(!uniform_ew){
+            if(val[j] == 0){
+                zero_weight++;
+                // ignore this edge in a later loop
+                src[j] = dst[j];
+                continue;
+            }
+        }
+        if(!symmetric){
+            uint64_t less = (u < v) ? u : v;
+            uint64_t more = (u > v) ? u : v;
+            uint64_t signature = less*n + more;
+            if(!is_new_entry(unique_edges, signature)){
+                // ignore this edge in a later loop
+                src[j] = dst[j];
+                continue;
+            }
+        }
+        row_map_m(u)++;
+        row_map_m(v)++;
+    }
+    unique_edges.clear();
+    if(self_loops > 0){
+        std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
+    }
+    if(zero_weight > 0){
+        std::cout << "WARNING: Ignoring " << zero_weight << " zero weight edges." << std::endl;
+    }
+    edge_offset_t sum = 0;
+    // compute row map
+    for(ordinal_t i = 0; i <= n; i++){
+        ordinal_t d = row_map_m(i);
+        row_map_m(i) = sum;
+        sum += d;
+    }
+
+    vtx_view_t entries(Kokkos::ViewAllocateWithoutInitializing("entries"), sum);
+    vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
+    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), sum);
+    wgt_mirror_t values_m;
+    if(!uniform_ew){
+        values_m = Kokkos::create_mirror_view(values);
+    }
+
+    std::vector<ordinal_t> counters(n, 0);
+    // write edges to entries
+    for(edge_offset_t j = 0; j < edges_read; j++){
+        ordinal_t u = src[j];
+        ordinal_t v = dst[j];
+        if(u == v) continue;
+        edge_offset_t u_offset = row_map_m(u) + counters[u]++;
+        edge_offset_t v_offset = row_map_m(v) + counters[v]++;
+        entries_m(u_offset) = v;
+        entries_m(v_offset) = u;
+        if(!uniform_ew){
+            values_m(u_offset) = val[j];
+            values_m(v_offset) = val[j];
+        }
+    }
+    Kokkos::deep_copy(row_map, row_map_m);
+    Kokkos::deep_copy(entries, entries_m);
+    if(!uniform_ew){
+        Kokkos::deep_copy(values, values_m);
+    } else {
+        Kokkos::deep_copy(values, 1);
+    }
+
+    graph_t g_graph(entries, row_map);
+    return matrix_t("input graph", n, values, g_graph);
+}
+
 enum class ParseState { SRC, DST, WGT };
 
 bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
@@ -200,98 +294,7 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     std::cout << "Finished reading data from " << fname << std::endl;
     std::cout << "Beginning conversion to CSR format" << std::endl;
 
-    int self_loops = 0;
-    int zero_weight = 0;
-    edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row_map"), n + 1);
-    edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
-    Kokkos::deep_copy(row_map_m, 0);
-    std::vector<uint64_t> unique_edges;
-    if(!metadata.is_symmetric){
-        size_t cap = 2;
-        while(cap < (size_t)m) cap <<= 1;
-        if(cap < (size_t)(1.1*m)) cap <<= 1;
-        // hashtable expects a power of 2 capacity
-        unique_edges.assign(cap, HASH_EMPTY);
-    }
-    // count edges per vertex
-    for(edge_offset_t j = 0; j < edges_read; j++){
-        ordinal_t u = src[j];
-        ordinal_t v = dst[j];
-        if(u == v){
-            self_loops++;
-            continue;
-        }
-        if(!uniform_ew){
-            if(val[j] == 0){
-                zero_weight++;
-                // ignore this edge in a later loop
-                src[j] = dst[j];
-                continue;
-            }
-        }
-        if(!metadata.is_symmetric){
-            uint64_t less = (u < v) ? u : v;
-            uint64_t more = (u > v) ? u : v;
-            uint64_t signature = less*n + more;
-            if(!is_new_entry(unique_edges, signature)){
-                // ignore this edge in a later loop
-                src[j] = dst[j];
-                continue;
-            }
-        }
-        row_map_m(u)++;
-        row_map_m(v)++;
-    }
-    unique_edges.clear();
-    if(self_loops > 0){
-        std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
-    }
-    if(zero_weight > 0){
-        std::cout << "WARNING: Ignoring " << zero_weight << " zero weight edges." << std::endl;
-    }
-    edge_offset_t sum = 0;
-    // compute row map
-    for(ordinal_t i = 0; i <= n; i++){
-        ordinal_t d = row_map_m(i);
-        row_map_m(i) = sum;
-        sum += d;
-    }
-
-    // must adjust for replicated edges and self loops that we ignored
-    m = sum / 2;
-    vtx_view_t entries(Kokkos::ViewAllocateWithoutInitializing("entries"), m*2);
-    vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
-    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), 2*m);
-    wgt_mirror_t values_m;
-    if(!uniform_ew){
-        values_m = Kokkos::create_mirror_view(values);
-    }
-
-    std::vector<ordinal_t> counters(n, 0);
-    // write edges to entries
-    for(edge_offset_t j = 0; j < edges_read; j++){
-        ordinal_t u = src[j];
-        ordinal_t v = dst[j];
-        if(u == v) continue;
-        edge_offset_t u_offset = row_map_m(u) + counters[u]++;
-        edge_offset_t v_offset = row_map_m(v) + counters[v]++;
-        entries_m(u_offset) = v;
-        entries_m(v_offset) = u;
-        if(!uniform_ew){
-            values_m(u_offset) = val[j];
-            values_m(v_offset) = val[j];
-        }
-    }
-    Kokkos::deep_copy(row_map, row_map_m);
-    Kokkos::deep_copy(entries, entries_m);
-    if(!uniform_ew){
-        Kokkos::deep_copy(values, values_m);
-    } else {
-        Kokkos::deep_copy(values, 1);
-    }
-
-    graph_t g_graph(entries, row_map);
-    g = matrix_t("input graph", n, values, g_graph);
+    g = construct_from_edgelist(n, src, dst, val, metadata.is_symmetric, uniform_ew);
     std::cout << "Read and constructed graph from " << fname << " in " << std::setprecision(3) << t.seconds() << "s" << std::endl;
     return true;
 }
