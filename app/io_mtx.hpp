@@ -198,7 +198,7 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
         return false;
     }
     std::cout << "Finished reading data from " << fname << std::endl;
-    std::cout << "Beginning construction of graph" << std::endl;
+    std::cout << "Beginning conversion to CSR format" << std::endl;
 
     int self_loops = 0;
     int zero_weight = 0;
