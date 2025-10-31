@@ -22,6 +22,7 @@ public:
     using edge_offset_t = typename matrix_t::size_type;
     using scalar_t = typename matrix_t::value_type;
     using vtx_vt = typename Kokkos::View<ordinal_t*, Device>;
+    using edge_vt = Kokkos::View<edge_offset_t*, Device>;
     using wgt_vt = typename Kokkos::View<scalar_t*, Device>;
     using part_vt = typename Kokkos::View<part_t*, Device>;
     using policy_t = typename Kokkos::RangePolicy<exec_space>;
@@ -32,7 +33,7 @@ public:
     using wg_t = weighted_graph<matrix_t>;
     // there is a problem edge-case in kokkos with MaxLoc that can be triggered rarely for any input graph
     // the problem will be fixed soon, use MaxFirstLoc in meantime
-    using argmax_reducer_t = Kokkos::MaxFirstLoc<uint32_t, edge_offset_t, Device>;
+    using argmax_reducer_t = Kokkos::MaxFirstLoc<float, edge_offset_t, Device>;
     using argmax_t = typename argmax_reducer_t::value_type;
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
@@ -44,7 +45,7 @@ public:
         const matrix_t g = wg.mtx;
         const wgt_vt vtx_w = wg.vtx_w;
         const ordinal_t n = g.numRows();
-        vtx_vt row_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
+        edge_vt row_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
         vtx_vt store_atom = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<ordinal_t>(0), n));
         vtx_vt ids = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
         vtx_vt sort_order = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
@@ -71,13 +72,12 @@ public:
             sort_order(insert) = order(i);
         });
 
-        // sort_order is unneeded after this
-        KokkosSparse::sort_crs_matrix<exec_space, vtx_vt, vtx_vt, vtx_vt>(exec_space(), row_map, sort_order, ids);
+        // sort_order and row_map are unneeded after this
+        KokkosSparse::sort_crs_matrix<exec_space, edge_vt, vtx_vt, vtx_vt>(exec_space(), row_map, sort_order, ids);
 
         wgt_vt total_size = mem.p_mem.pvals;
-        wgt_vt inner_conn = Kokkos::subview(mem.s_mem.vtx2, std::make_pair(static_cast<ordinal_t>(0), n));
+        wgt_vt inner_conn = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<ordinal_t>(0), n));
         wgt_vt pvals = Kokkos::subview(mem.p_mem.pvals_clone, std::make_pair(static_cast<ordinal_t>(0), n));
-        wgt_vt outer_conn = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<ordinal_t>(0), n));
         // gets the total size of each cluster during construction by order of ids view
         Kokkos::parallel_scan("scan total_size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
             ordinal_t i = ids(x);
@@ -107,19 +107,17 @@ public:
             ordinal_t i = large_vtx(thread.league_rank());
             edge_offset_t end = g.graph.row_map(i + 1);
             edge_offset_t start = g.graph.row_map(i);
-            scalar_t result = 0;
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, scalar_t& update) {
                 ordinal_t v = g.graph.entries(idx);
                 if(vcmap(i) == vcmap(v) && order(v) < order(i)) update += g.values(idx);
-            }, result);
-            inner_conn(i) = result;
+            }, inner_conn(i));
         });
 
         // alias and reuse
         vtx_vt breakers = order;
         Kokkos::deep_copy(exec_space(), breakers, n);
 
-        // break clusters if vertex i not well connect to cluster
+        // break clusters if vertex i not well connected to cluster
         Kokkos::parallel_for("find breakpoints (part 1)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = ids(x);
             ordinal_t c = vcmap(i);
@@ -131,6 +129,8 @@ public:
             }
         });
 
+        // aliasing
+        wgt_vt outer_conn = inner_conn;
         // gets the total outward connectivity of each cluster during construction by order of ids view
         Kokkos::parallel_scan("scan outward connectivity (inclusive)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, scalar_t& update, const bool final){
             ordinal_t i = ids(x);
@@ -138,19 +138,20 @@ public:
             scalar_t val = pvals(i) - 2*inner_conn(i);
             update += val;
             if(final){
-                outer_conn(x) = update;
+                // use i instead of x so that the aliasing works
+                outer_conn(i) = update;
             }
         });
 
-        // break cluster if cluster not well connected to rest of constraint cluster
+        // break cluster if cluster up to i not well connected to rest of constraint cluster
         Kokkos::parallel_for("find breakpoints (part 2)", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = ids(x);
             ordinal_t c = vcmap(i);
             ordinal_t c_begin = row_map(c);
             scalar_t curr_size = total_size(x) + vtx_w(i) - total_size(c_begin);
             scalar_t other_size = total_deg(constraint(i)) - curr_size;
-            scalar_t outer = outer_conn(x);
-            if(c_begin > 0) outer -= outer_conn(c_begin - 1);
+            scalar_t outer = outer_conn(i);
+            if(c_begin > 0) outer -= outer_conn(ids(c_begin - 1));
             if(outer < gamma*curr_size*other_size){
                 // break cluster after x
                 Kokkos::atomic_min(&breakers(c), x + 1);
@@ -276,13 +277,13 @@ public:
                 ordinal_t width = end - start;
                 float multi = gamma*vtx_w(i);
                 hasher_t hash;
-                ordinal_t jx = hash(seed + i);
+                edge_offset_t jx = hash(seed + i);
                 // 0.001 chance to self-aggregate
                 if(jx % 1000 == 0 || well_conn(i) == 0){
                     hn(i) = i;
                     return;
                 }
-                jx = start + Kokkos::abs(jx % width);
+                jx = start + (jx % static_cast<uint32_t>(width));
                 // choose random satisfactory neighbor
                 for(edge_offset_t j = jx; j < end; j++){
                     ordinal_t v = g.graph.entries(j);
@@ -351,9 +352,9 @@ public:
                     hn(i) = i;
                     return;
                 }
-                typename Kokkos::MaxLoc<float,edge_offset_t,Device>::value_type argmax{0, end};
+                argmax_t argmax{0, end};
                 // get neighbor maximizing objective
-                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, Kokkos::ValLocScalar<float,edge_offset_t>& local) {
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, argmax_t& local) {
                     ordinal_t v = g.graph.entries(idx);
                     if(constraint(i) != constraint(v)) return;
                     if(well_conn(v) == 0) return;
@@ -364,7 +365,7 @@ public:
                         local.loc = idx;
                     }
                 
-                }, Kokkos::MaxLoc<float, edge_offset_t,Device>(argmax));
+                }, argmax_reducer_t(argmax));
                 Kokkos::single(Kokkos::PerTeam(thread), [=](){
                     if(argmax.loc >= start && argmax.loc < end && argmax.val >= 0){
                         ordinal_t h = g.graph.entries(argmax.loc);

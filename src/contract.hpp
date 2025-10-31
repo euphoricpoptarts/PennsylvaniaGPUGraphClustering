@@ -85,6 +85,7 @@ public:
     using edge_subview_t = Kokkos::View<edge_offset_t, Device>;
     using graph_type = typename matrix_t::staticcrsgraph_type;
     using policy_t = Kokkos::RangePolicy<exec_space>;
+    using big_policy_t = Kokkos::RangePolicy<exec_space, Kokkos::IndexType<edge_offset_t>>;
     using dyn_policy_t = Kokkos::RangePolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
@@ -157,7 +158,7 @@ struct combineAndDedupe {
     // uses linear probing to resolve hash conflicts
     KOKKOS_INLINE_FUNCTION
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u, const ordinal_t& i) const {
-            edge_offset_t offset = abs(xorshiftHash<ordinal_t>(u) % size);
+            edge_offset_t offset = xorshiftHash<ordinal_t>(u) % static_cast<uint32_t>(size);
             while(true){
                 if(htable(hash_start + offset) == -1){
                     if(Kokkos::atomic_compare_exchange(&htable(hash_start + offset), -1, u) == -1){
@@ -252,9 +253,9 @@ wg_t build_coarse_graph(const wg_t curr_level,
             hrow_map(i) = update;
         }
         update += val;
-    }, mem.s_mem.scan_host);
+    }, mem.s_mem.edge_scan_host);
     exec_space().fence();
-    hash_size = mem.s_mem.scan_host();
+    hash_size = mem.s_mem.edge_scan_host();
     vtx_view_t htable = Kokkos::subview(mem.p_mem.entries, std::make_pair((edge_offset_t)0, hash_size));
     fast_fill(htable, -1);
     // Kokkos::deep_copy(exec_space(), htable, -1);
@@ -280,20 +281,22 @@ wg_t build_coarse_graph(const wg_t curr_level,
             coarse_row_map_f(i) = update;
         }
         update += val;
-    }, mem.s_mem.scan_host);
+    }, mem.s_mem.edge_scan_host);
     exec_space().fence();
-    hash_size = mem.s_mem.scan_host();
+    hash_size = mem.s_mem.edge_scan_host();
 
     // stream compaction
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();
-    thrust::device_ptr<int> htb(htable.data());
+    thrust::device_ptr<ordinal_t> htb(htable.data());
     thrust::counting_iterator<int> iter(0);
-    thrust::device_ptr<int> ec(entries_coarse.data());
-    thrust::copy_if(thrust::device, iter, iter + old_size, htb, ec, is_nonnegative());
-    Kokkos::parallel_for("read", policy_t(0, hash_size), KOKKOS_LAMBDA(const edge_offset_t j){
-        edge_offset_t jx = entries_coarse(j);
+    // scalar_t and edge_offset_t are the same type in the current code
+    // and they should usually be the same type
+    thrust::device_ptr<edge_offset_t> wc(wgts_coarse.data());
+    thrust::copy_if(thrust::device, iter, iter + old_size, htb, wc, is_nonnegative());
+    Kokkos::parallel_for("read", big_policy_t(0, hash_size), KOKKOS_LAMBDA(const edge_offset_t j){
+        edge_offset_t jx = wgts_coarse(j);
         entries_coarse(j) = htable(jx);
         wgts_coarse(j) = hvals(jx);
     });
