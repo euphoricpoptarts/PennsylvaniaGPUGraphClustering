@@ -627,6 +627,8 @@ void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t
         ordinal_t* s_conn_entries;
         scalar_t* s_conn_vals;
         if(size < max_size){
+            // vals should come before entries because scalar_t is at least as large as ordinal_t
+            // thus there could be alignment errors if vals is allocated second
             s_conn_vals = (scalar_t*) t.team_shmem().get_shmem(sizeof(scalar_t) * size);
             s_conn_entries = (ordinal_t*) t.team_shmem().get_shmem(sizeof(ordinal_t) * size);
         } else {
@@ -960,6 +962,8 @@ void init_conn_graph(const wg_t& wg, const vtx_vt& part, cdata_t& cdata, mem_t& 
         ordinal_t* s_conn_entries;
         scalar_t* s_conn_vals;
         if(size < max_size){
+            // vals should come before entries because scalar_t is at least as large as ordinal_t
+            // thus there could be alignment errors if vals is allocated second
             s_conn_vals = (scalar_t*) t.team_shmem().get_shmem(sizeof(scalar_t) * size);
             s_conn_entries = (ordinal_t*) t.team_shmem().get_shmem(sizeof(ordinal_t) * size);
             Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, size), [&] (const edge_offset_t& j) {
