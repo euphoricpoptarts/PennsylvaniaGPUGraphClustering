@@ -290,7 +290,7 @@ wg_t build_coarse_graph(const wg_t curr_level,
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();
     thrust::device_ptr<ordinal_t> htb(htable.data());
-    thrust::counting_iterator<int> iter(0);
+    thrust::counting_iterator<edge_offset_t> iter(0);
     // scalar_t and edge_offset_t are the same type in the current code
     // and they should usually be the same type
     thrust::device_ptr<edge_offset_t> wc(wgts_coarse.data());
