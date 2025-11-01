@@ -7,6 +7,8 @@
 #include <fstream>
 #include <vector>
 #include <functional>
+#include "Kokkos_UnorderedMap.hpp"
+#include "KokkosSparse_SortCrs.hpp"
 #include "io.hpp"
 
 namespace jet_community {
@@ -55,70 +57,82 @@ mm_meta get_mm_metadata(const char* f, const char* fmax){
     return data;
 }
 
-uint64_t HASH_EMPTY = std::numeric_limits<uint64_t>::max();
+static constexpr uint64_t HASH_EMPTY = std::numeric_limits<uint64_t>::max();
 
 // basic linear-probing hash table
-bool is_new_entry(std::vector<uint64_t>& htable, uint64_t x){
-    std::hash<uint64_t> hash_f;
-    size_t cap = htable.size();
-    size_t mod = cap - 1;
-    size_t i = hash_f(x) & mod;
+KOKKOS_INLINE_FUNCTION
+bool is_new_entry(const Kokkos::View<uint64_t*, Device>& htable, ordinal_t u, ordinal_t v, size_t mod){
+    using hasher_t = Kokkos::pod_hash<ordinal_t>;
+    hasher_t hash_f;
+    ordinal_t less = (u < v) ? u : v;
+    uint64_t hless = hash_f(less);
+    ordinal_t more = (u > v) ? u : v;
+    uint64_t hmore = hash_f(more);
+    uint64_t sig = (static_cast<uint64_t>(less) << 32) | more;
+    size_t i = (hless*hmore + (hmore & hless)) & mod;
     while(true){
-        if(htable[i] == HASH_EMPTY){
-            htable[i] = x;
-            return true;
-        } else if(htable[i] == x){
+        if(htable(i) == HASH_EMPTY){
+            if(Kokkos::atomic_compare_exchange(&htable(i), HASH_EMPTY, sig) == HASH_EMPTY){
+                return true;
+            }
+        }
+        if(htable(i) == sig){
             return false;
         }
         i = (i + 1) & mod;
     }
 }
 
-matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src, std::vector<ordinal_t>& dst, std::vector<value_t>& val, bool symmetric, bool uniform_ew){
+matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std::vector<ordinal_t>& dst_v, std::vector<value_t>& val_v, bool symmetric, bool uniform_ew){
     int self_loops = 0;
     int zero_weight = 0;
-    edge_offset_t edges_read = src.size();
+    edge_offset_t edges_read = src_v.size();
+    Kokkos::View<ordinal_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> src_host(src_v.data(), edges_read);
+    Kokkos::View<ordinal_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> dst_host(dst_v.data(), edges_read);
+    Kokkos::View<value_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> val_host(val_v.data(), edges_read);
+    vtx_view_t src(Kokkos::ViewAllocateWithoutInitializing("src"), edges_read);
+    vtx_view_t dst(Kokkos::ViewAllocateWithoutInitializing("dst"), edges_read);
+    wgt_view_t val(Kokkos::ViewAllocateWithoutInitializing("val"), edges_read);
     edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row_map"), n + 1);
-    edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
-    Kokkos::deep_copy(row_map_m, 0);
-    std::vector<uint64_t> unique_edges;
+    Kokkos::deep_copy(src, src_host);
+    Kokkos::deep_copy(dst, dst_host);
+    Kokkos::deep_copy(val, val_host);
+    Kokkos::deep_copy(row_map, 0);
+    Kokkos::View<uint64_t*, Device> unique_edges;
+    size_t mod = 0;
     if(!symmetric){
         size_t cap = 2;
         while(cap < (size_t)edges_read) cap <<= 1;
         if(cap < (size_t)(1.1*edges_read)) cap <<= 1;
+        mod = cap - 1;
         // hashtable expects a power of 2 capacity
-        unique_edges.assign(cap, HASH_EMPTY);
+        unique_edges = Kokkos::View<uint64_t*, Device>(Kokkos::ViewAllocateWithoutInitializing("unique edges table"), cap);
+        Kokkos::deep_copy(unique_edges, HASH_EMPTY);
     }
     // count edges per vertex
-    for(edge_offset_t j = 0; j < edges_read; j++){
-        ordinal_t u = src[j];
-        ordinal_t v = dst[j];
+    Kokkos::parallel_for("count edges", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
+        ordinal_t u = src(j);
+        ordinal_t v = dst(j);
         if(u == v){
-            self_loops++;
-            continue;
+            return;
         }
         if(!uniform_ew){
-            if(val[j] == 0){
-                zero_weight++;
+            if(val(j) == 0){
                 // ignore this edge in a later loop
-                src[j] = dst[j];
-                continue;
+                src(j) = dst(j);
+                return;
             }
         }
         if(!symmetric){
-            uint64_t less = (u < v) ? u : v;
-            uint64_t more = (u > v) ? u : v;
-            uint64_t signature = less*n + more;
-            if(!is_new_entry(unique_edges, signature)){
+            if(!is_new_entry(unique_edges, u, v, mod)){
                 // ignore this edge in a later loop
-                src[j] = dst[j];
-                continue;
+                src(j) = dst(j);
+                return;
             }
         }
-        row_map_m(u)++;
-        row_map_m(v)++;
-    }
-    unique_edges.clear();
+        Kokkos::atomic_add(&row_map(u), 1);
+        Kokkos::atomic_add(&row_map(v), 1);
+    });
     if(self_loops > 0){
         std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
     }
@@ -127,43 +141,39 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src, std::
     }
     edge_offset_t sum = 0;
     // compute row map
-    for(ordinal_t i = 0; i <= n; i++){
-        ordinal_t d = row_map_m(i);
-        row_map_m(i) = sum;
-        sum += d;
-    }
+    Kokkos::parallel_scan("row map exclusive prefix sum", r_policy(0, n + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
+        ordinal_t d = row_map(i);
+        if(final){
+            row_map(i) = update;
+        }
+        update += d;
+    }, sum);
 
     vtx_view_t entries(Kokkos::ViewAllocateWithoutInitializing("entries"), sum);
-    vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
     wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), sum);
-    wgt_mirror_t values_m;
-    if(!uniform_ew){
-        values_m = Kokkos::create_mirror_view(values);
-    }
 
-    std::vector<ordinal_t> counters(n, 0);
+    vtx_view_t counters("per vertex degree counter", n);
     // write edges to entries
-    for(edge_offset_t j = 0; j < edges_read; j++){
-        ordinal_t u = src[j];
-        ordinal_t v = dst[j];
-        if(u == v) continue;
-        edge_offset_t u_offset = row_map_m(u) + counters[u]++;
-        edge_offset_t v_offset = row_map_m(v) + counters[v]++;
-        entries_m(u_offset) = v;
-        entries_m(v_offset) = u;
+    Kokkos::parallel_for("count edges", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
+        ordinal_t u = src(j);
+        ordinal_t v = dst(j);
+        if(u == v) return;
+        edge_offset_t u_offset = row_map(u) + Kokkos::atomic_fetch_add(&counters(u), 1);
+        edge_offset_t v_offset = row_map(v) + Kokkos::atomic_fetch_add(&counters(v), 1);
+        entries(u_offset) = v;
+        entries(v_offset) = u;
         if(!uniform_ew){
-            values_m(u_offset) = val[j];
-            values_m(v_offset) = val[j];
+            values(u_offset) = val(j);
+            values(v_offset) = val(j);
         }
-    }
-    Kokkos::deep_copy(row_map, row_map_m);
-    Kokkos::deep_copy(entries, entries_m);
-    if(!uniform_ew){
-        Kokkos::deep_copy(values, values_m);
-    } else {
+    });
+    if(uniform_ew){
         Kokkos::deep_copy(values, 1);
     }
 
+    // atomics will almost certainly cause reordering of the entries in each row
+    // so we sort to fix it (even if it wasn't sorted to begin with, but what can you do?)
+    KokkosSparse::sort_crs_matrix<typename Device::execution_space, edge_view_t, vtx_view_t, wgt_view_t>(typename Device::execution_space(), row_map, entries, values);
     graph_t g_graph(entries, row_map);
     return matrix_t("input graph", n, values, g_graph);
 }

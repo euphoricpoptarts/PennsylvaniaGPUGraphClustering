@@ -87,6 +87,7 @@ using wgt_view_t = Kokkos::View<value_t*, Device>;
 using wgt_mirror_t = typename wgt_view_t::HostMirror;
 using policy = Kokkos::TeamPolicy<typename Device::execution_space>;
 using r_policy = Kokkos::RangePolicy<typename Device::execution_space>;
+using big_r_policy = Kokkos::RangePolicy<typename Device::execution_space, Kokkos::IndexType<edge_offset_t>>;
 using member = typename policy::member_type;
 using part_t = int;
 using part_vt = Kokkos::View<part_t*, Device>;
