@@ -89,14 +89,16 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
     edge_offset_t edges_read = src_v.size();
     Kokkos::View<ordinal_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> src_host(src_v.data(), edges_read);
     Kokkos::View<ordinal_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> dst_host(dst_v.data(), edges_read);
-    Kokkos::View<value_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> val_host(val_v.data(), edges_read);
     vtx_view_t src(Kokkos::ViewAllocateWithoutInitializing("src"), edges_read);
     vtx_view_t dst(Kokkos::ViewAllocateWithoutInitializing("dst"), edges_read);
     wgt_view_t val(Kokkos::ViewAllocateWithoutInitializing("val"), edges_read);
     edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row_map"), n + 1);
     Kokkos::deep_copy(src, src_host);
     Kokkos::deep_copy(dst, dst_host);
-    Kokkos::deep_copy(val, val_host);
+    if(!uniform_ew){
+        Kokkos::View<value_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> val_host(val_v.data(), edges_read);
+        Kokkos::deep_copy(val, val_host);
+    }
     Kokkos::deep_copy(row_map, 0);
     Kokkos::View<uint64_t*, Device> unique_edges;
     size_t mod = 0;
@@ -110,7 +112,7 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
         Kokkos::deep_copy(unique_edges, HASH_EMPTY);
     }
     // count edges per vertex
-    Kokkos::parallel_for("count edges", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
+    Kokkos::parallel_for("count edges per vertex (also find duplicates if not symmetric)", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
         ordinal_t u = src(j);
         ordinal_t v = dst(j);
         if(u == v){
@@ -133,6 +135,8 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
         Kokkos::atomic_add(&row_map(u), 1);
         Kokkos::atomic_add(&row_map(v), 1);
     });
+    // deallocate
+    unique_edges = Kokkos::View<uint64_t*, Device>("dummy", 0);
     if(self_loops > 0){
         std::cout << "WARNING: Ignoring " << self_loops << " self loop edges." << std::endl;
     }
@@ -154,7 +158,7 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
 
     vtx_view_t counters("per vertex degree counter", n);
     // write edges to entries
-    Kokkos::parallel_for("count edges", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
+    Kokkos::parallel_for("write edges", big_r_policy(0, edges_read), KOKKOS_LAMBDA(const edge_offset_t j){
         ordinal_t u = src(j);
         ordinal_t v = dst(j);
         if(u == v) return;
@@ -170,10 +174,15 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
     if(uniform_ew){
         Kokkos::deep_copy(values, 1);
     }
+    // deallocate
+    src = vtx_view_t("dummy", 0);
+    dst = vtx_view_t("dummy", 0);
+    val = wgt_view_t("dummy", 0);
 
     // atomics will almost certainly cause reordering of the entries in each row
-    // so we sort to fix it (even if it wasn't sorted to begin with, but what can you do?)
-    KokkosSparse::sort_crs_matrix<typename Device::execution_space, edge_view_t, vtx_view_t, wgt_view_t>(typename Device::execution_space(), row_map, entries, values);
+    // so we sort to fix it (even if it wasn't sorted to begin with, but most graphs I've seen are)
+    // use parallel_thread_level sort to avoid the large memory allocations made with other method
+    KokkosSparse::sort_crs_matrix<typename Device::execution_space, edge_view_t, vtx_view_t, wgt_view_t>(typename Device::execution_space(), row_map, entries, values, n, KokkosSparse::SortAlgorithm::PARALLEL_THREAD_LEVEL);
     graph_t g_graph(entries, row_map);
     return matrix_t("input graph", n, values, g_graph);
 }
