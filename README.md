@@ -1,6 +1,6 @@
 # Graph Clustering Algorithms for the GPU
 
-Depends on Kokkos (https://github.com/kokkos/kokkos), KokkosKernels (https://github.com/kokkos/kokkos-kernels), and the Cuda Toolkit (version >12.0).
+Depends on Kokkos (https://github.com/kokkos/kokkos) (version >= 4.7.0 recommended), KokkosKernels (https://github.com/kokkos/kokkos-kernels) (version >= 4.7.0 recommended), and the Cuda Toolkit (version >12.0).
 
 This is a parallel undirected graph clustering package that implements novel GPU-first formulations of the Louvain and Leiden clustering algorithms.  
 Our pLeiden and pLeiden+ implementations are the first to provide the Leiden algorithm's six original guarantees in a parallel setting.
@@ -45,7 +45,8 @@ Quality is generally superior to VieClus in the same amount of time.
 **-time_limit \<Integer\>**: Time limit of evolutionary method in seconds. Default: 10. Minimum: 10
 
 ### Input Format
-Our parser fails if it finds vertex weights within metis graph files. Please specify vertex weights with **-vtx_weights** parameter.
+Our parser fails if it finds vertex weights within metis graph files. Please specify vertex weights with **-vtx_weights** parameter.  
+Metis format importing is faster than Matrix Market format importing.
 
 ## Comparison versus State of the Art Parallel Clustering Algorithms
 The below images compare our programs with the following state-of-the-art competitors:  
