@@ -183,7 +183,7 @@ cluster_args parse_cluster_args(int argc, char** argv){
     }
     if(given_options.count("-ex_iters") != 0){
         args.n_successive_iterations = std::stoi(given_options["-ex_iters"]);
-        if(args.n_successive_iterations < 0) args.n_successive_iterations = 0;
+        if(args.n_successive_iterations < -1) args.n_successive_iterations = -1;
     }
     if(given_options.count("-metrics") != 0){
         args.metrics_file = given_options["-metrics"];

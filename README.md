@@ -37,7 +37,7 @@ Quality is generally superior to VieClus in the same amount of time.
 ### Optional For pLouvain, pLeiden, pLeiden+, and meme
 **-o \<Output Clusters File\>** Writes the clustering, numbered `0` to `c-1` for `c` clusters, to the given file. Line `x` gives the cluster to which vertex `x` belongs. Default: None
 ### Optional for pLouvain, pLeiden, and pLeiden+
-**-ex_iters \<Integer\>**: Applies the program successively on its own output for the given iteration count. Default: 0  
+**-ex_iters \<Integer\>**: Applies the program successively on its own output for the given iteration count. Input a negative integer to iterate until stability. Default: 0  
 **-trials \<Integer\>**: Performs this number of clustering trials, and returns the best clustering. Default: 1  
 **-metrics \<Output Metrics File\>**: Dump various timing data in json format to file. Default: None
 ### Optional for meme

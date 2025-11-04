@@ -90,6 +90,21 @@ void connected_comps(matrix_t g, part_vt part_d){
     // return comp_ids;
 }
 
+bool iteration_termination_condition(const cluster_args args, std::unique_ptr<rfd_t>& rfd, double& last_obj, int& counter){
+    bool terminate = true;
+    if(args.n_successive_iterations < 0){
+        if(rfd->get_objective() > last_obj){
+            terminate = false;
+        }
+        last_obj = rfd->get_objective();
+    } else {
+        if(counter++ < args.n_successive_iterations){
+            terminate = false;
+        }
+    }
+    return terminate;
+}
+
 part_vt run_clustering(const wg_t wg,
                     double& obj,
                     const cluster_args args,
@@ -109,7 +124,9 @@ part_vt run_clustering(const wg_t wg,
     double time = iteration.seconds();
     std::cout << "Cluster time: " << time << "; " << *rfd << std::endl;
     iteration.reset();
-    for(int i = 0; i < args.n_successive_iterations; i++){
+    double last_obj = -std::numeric_limits<double>::infinity();
+    int counter = 0;
+    while(!iteration_termination_condition(args, rfd, last_obj, counter)){
         constraint = part;
 #ifdef LEIDEN
         part = cm_t::leiden_part<true>(mem, wg, *rfd, experiment, constraint);

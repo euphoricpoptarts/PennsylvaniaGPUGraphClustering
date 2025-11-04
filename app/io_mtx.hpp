@@ -162,6 +162,8 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
         ordinal_t u = src(j);
         ordinal_t v = dst(j);
         if(u == v) return;
+        // could do this faster if we stored the result of the atomic add from the prior kernel
+        // but that would take memory proportional to edges_read
         edge_offset_t u_offset = row_map(u) + Kokkos::atomic_fetch_add(&counters(u), 1);
         edge_offset_t v_offset = row_map(v) + Kokkos::atomic_fetch_add(&counters(v), 1);
         entries(u_offset) = v;
