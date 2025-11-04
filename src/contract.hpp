@@ -104,19 +104,23 @@ public:
     static constexpr ordinal_t ORD_MAX  = get_null_val();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
+template <bool uniform>
 struct countingFunctor {
 
     matrix_t g;
     vtx_view_t vcmap;
     edge_view_t degree_initial;
+    wgt_view_t pvals;
     ordinal_t workLength;
 
     countingFunctor(matrix_t _g,
             vtx_view_t _vcmap,
-            edge_view_t _degree_initial) :
+            edge_view_t _degree_initial,
+            wgt_view_t _pvals) :
         g(_g),
         vcmap(_vcmap),
         degree_initial(_degree_initial),
+        pvals(_pvals),
         workLength(_g.numRows()) {}
 
     KOKKOS_INLINE_FUNCTION
@@ -126,6 +130,13 @@ struct countingFunctor {
         edge_offset_t start = g.graph.row_map(i);
         edge_offset_t end = g.graph.row_map(i + 1);
         ordinal_t nonLoopEdgesTotal = end - start;
+        // for uniformly edge weighted graphs
+        // pvals(i) is equal to the number of self loops
+        // which fine vertex i would contribute to coarse vertex u
+        // this optimization allows the memory initialization and stream compaction
+        // operations to do less work, and makes the cache utilization of
+        // deduplication a bit better
+        if constexpr(uniform) nonLoopEdgesTotal -= pvals(i);
         Kokkos::atomic_add(&degree_initial(u), nonLoopEdgesTotal);
     }
 };
@@ -241,8 +252,9 @@ wg_t build_coarse_graph(const wg_t curr_level,
 
     // determine upper bound on coarse vertex sizes
     edge_view_t hrow_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair((ordinal_t)0, nc + 1));
+    wgt_view_t pvals_clone = mem.p_mem.pvals_clone;
     Kokkos::deep_copy(exec_space(), hrow_map, 0);
-    countingFunctor countF(g, vcmap, hrow_map);
+    countingFunctor<uniform> countF(g, vcmap, hrow_map, pvals_clone);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
 
     // allocate hash tables for each coarse vertex
