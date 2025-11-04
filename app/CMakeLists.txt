@@ -4,13 +4,15 @@ add_executable(pleiden+ cluster_main.cpp)
 add_executable(meme memetic_clustering.cpp)
 add_executable(verify_obj verify_objective.cpp)
 
-foreach(prog plouvain pleiden pleiden+ verify_obj meme)
-    target_include_directories(${prog} PRIVATE ${CMAKE_SOURCE_DIR}/header ${CMAKE_SOURCE_DIR}/src)
+set(TARGETS plouvain pleiden pleiden+ verify_obj meme)
+
+foreach(prog IN LISTS TARGETS)
+    target_include_directories(${prog} PRIVATE ${CMAKE_SOURCE_DIR}/src)
 endforeach(prog)
 
 target_compile_definitions(pleiden PUBLIC LEIDEN)
 target_compile_definitions(pleiden+ PUBLIC LEIDEN LEIDEN_PLUS)
 target_compile_definitions(meme PUBLIC LEIDEN_PLUS)
-foreach(prog plouvain pleiden pleiden+ verify_obj meme)
+foreach(prog IN LISTS TARGETS)
     target_link_libraries(${prog} Kokkos::kokkos Kokkos::kokkoskernels)
 endforeach()
