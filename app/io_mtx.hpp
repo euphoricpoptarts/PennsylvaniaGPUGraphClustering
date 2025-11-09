@@ -83,7 +83,7 @@ bool is_new_entry(const Kokkos::View<uint64_t*, Device>& htable, ordinal_t u, or
     }
 }
 
-matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std::vector<ordinal_t>& dst_v, std::vector<value_t>& val_v, bool symmetric, bool uniform_ew){
+matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std::vector<ordinal_t>& dst_v, std::vector<value_t>& val_v, const bool symmetric, const bool uniform_ew){
     int self_loops = 0;
     int zero_weight = 0;
     edge_offset_t edges_read = src_v.size();
@@ -154,7 +154,8 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
     }, sum);
 
     vtx_view_t entries(Kokkos::ViewAllocateWithoutInitializing("entries"), sum);
-    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), sum);
+    wgt_view_t values;
+    if(!uniform_ew) values = wgt_view_t(Kokkos::ViewAllocateWithoutInitializing("values"), sum);
 
     vtx_view_t counters("per vertex degree counter", n);
     // write edges to entries
@@ -173,9 +174,6 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
             values(v_offset) = val(j);
         }
     });
-    if(uniform_ew){
-        Kokkos::deep_copy(values, 1);
-    }
     // deallocate
     src = vtx_view_t("dummy", 0);
     dst = vtx_view_t("dummy", 0);
@@ -184,7 +182,11 @@ matrix_t construct_from_edgelist(ordinal_t n, std::vector<ordinal_t>& src_v, std
     // atomics will almost certainly cause reordering of the entries in each row
     // so we sort to fix it (even if it wasn't sorted to begin with, but most graphs I've seen are)
     // use parallel_thread_level sort to avoid the large memory allocations made with other method
-    KokkosSparse::sort_crs_matrix<typename Device::execution_space, edge_view_t, vtx_view_t, wgt_view_t>(typename Device::execution_space(), row_map, entries, values, n, KokkosSparse::SortAlgorithm::PARALLEL_THREAD_LEVEL);
+    if(!uniform_ew) {
+        KokkosSparse::sort_crs_matrix<typename Device::execution_space, edge_view_t, vtx_view_t, wgt_view_t>(typename Device::execution_space(), row_map, entries, values, n, KokkosSparse::SortAlgorithm::PARALLEL_THREAD_LEVEL);
+    } else{
+        KokkosSparse::sort_crs_graph<typename Device::execution_space, edge_view_t, vtx_view_t>(typename Device::execution_space(), row_map, entries, n, KokkosSparse::SortAlgorithm::PARALLEL_THREAD_LEVEL);
+    }
     graph_t g_graph(entries, row_map);
     return matrix_t("input graph", n, values, g_graph);
 }
@@ -217,12 +219,13 @@ bool load_mtx_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
         std::cerr << "FATAL ERROR: Importing of non-coordinate format matrix market files is not currently supported!" << std::endl;
         return false;
     }
-    uniform_ew = true;
     if(!metadata.is_pattern) {
         if(metadata.is_integer){
-            uniform_ew = false;
-            std::cout << "INFO: This file has edge weights." << std::endl;
-        } else {
+            if(uniform_ew){
+                std::cout << "INFO: This file has edge weights. The given objective function treats edge weights as unit uniform. Please see Objectives.md for more information." << std::endl;
+            }
+        } else if(!uniform_ew) {
+            uniform_ew = true;
             std::cout << "WARNING: Non-integer edge weights given in matrix market file. This is not currently supported. The given weights will be ignored." << std::endl;
         }
     }

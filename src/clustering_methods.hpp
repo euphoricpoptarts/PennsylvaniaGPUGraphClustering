@@ -63,10 +63,10 @@ public:
             // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
             if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
-            else local_mover.template local_move<false, false>(c, part, rfd, false, mem, part);
+            else local_mover.template local_move<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             if(old_obj == rfd.obj){
                 if(c.edge_uniform) local_mover.template local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
-                else local_mover.template local_move_strict<false, false>(c, part, rfd, false, mem, part);
+                else local_mover.template local_move_strict<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
@@ -75,15 +75,16 @@ public:
             vtx_vt louv = part;
             int coarse_vtx_count = 0;
             vtx_vt coarse_map;
-            if(levels.size() == 1) coarse_map = lr_t::template coarsen_leidenR<true>(c, louv, mem, rfd, coarse_vtx_count);
-            else coarse_map = lr_t::template coarsen_leidenR<false>(c, louv, mem, rfd, coarse_vtx_count);
+            if(levels.size() == 1 && c.edge_uniform) coarse_map = lr_t::template coarsen_leidenR<true, true>(c, louv, mem, rfd, coarse_vtx_count);
+            else if(levels.size() == 1 && !(c.edge_uniform)) coarse_map = lr_t::template coarsen_leidenR<true, false>(c, louv, mem, rfd, coarse_vtx_count);
+            else coarse_map = lr_t::template coarsen_leidenR<false, false>(c, louv, mem, rfd, coarse_vtx_count);
             parts.push_back(coarse_map);
             if(coarse_vtx_count < c.mtx.numRows()){
                 Kokkos::Timer t;
                 contracter_t contracter;
                 wg_t next_level;
-                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true>(c, coarse_map, coarse_vtx_count, mem);
-                else next_level = contracter.template build_coarse_graph<false>(c, coarse_map, coarse_vtx_count, mem);
+                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
+                else next_level = contracter.template build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
                 next_level.vtx_w = wgt_view_t("weighted degree 2", coarse_vtx_count);
                 coarsen_vtx_w(c.vtx_w, next_level.vtx_w, coarse_map);
 
@@ -153,8 +154,8 @@ public:
                 Kokkos::Timer t;
                 contracter_t contracter;
                 wg_t next_level;
-                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true>(c, part, rfd.label_count, mem);
-                else next_level = contracter.template build_coarse_graph<false>(c, part, rfd.label_count, mem);
+                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
+                else next_level = contracter.template build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
                 wgt_view_t td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
                 next_level.vtx_w = wgt_view_t("next level vtx weights", rfd.label_count);
                 Kokkos::deep_copy(next_level.vtx_w, td_rfd);

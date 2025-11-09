@@ -19,10 +19,8 @@ namespace jet_community {
         }
     }
 
-    bool sanitize_edge_weights(matrix_t g, const base_args args) {
+    bool uses_edge_weights(const base_args args) {
         if(args.obj_type == Objective::Modularity || args.obj_type == Objective::CPM){
-            std::cout << "WARNING: Edge weights not compatible with objective. Setting edge weights to 1" << std::endl;
-            Kokkos::deep_copy(g.values, 1);
             return true;
         }
         return false;

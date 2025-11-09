@@ -40,6 +40,7 @@ public:
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
     static constexpr ordinal_t split = 1000000000;
 
+    template <bool uniform>
     static void ensure_gamma_connectivity(const wg_t wg, part_vt vcmap, part_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
         const matrix_t g = wg.mtx;
@@ -99,7 +100,10 @@ public:
             scalar_t result = 0;
             for(edge_offset_t idx = start; idx < end; idx++) {
                 ordinal_t v = g.graph.entries(idx);
-                if(vcmap(i) == vcmap(v) && order(v) < order(i)) result += g.values(idx);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(idx);
+                if(vcmap(i) == vcmap(v) && order(v) < order(i)) result += wgt;
             }
             inner_conn(i) = result;
         });
@@ -109,7 +113,10 @@ public:
             edge_offset_t start = g.graph.row_map(i);
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, scalar_t& update) {
                 ordinal_t v = g.graph.entries(idx);
-                if(vcmap(i) == vcmap(v) && order(v) < order(i)) update += g.values(idx);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(idx);
+                if(vcmap(i) == vcmap(v) && order(v) < order(i)) update += wgt;
             }, inner_conn(i));
         });
 
@@ -240,7 +247,8 @@ public:
         });
     }
 
-    template <bool top>
+    // uniform is true only if top is true
+    template <bool top, bool uniform>
     static part_vt coarsen_leidenR(const wg_t wg,
         const part_vt& constraint,
         mem_t& mem,
@@ -289,7 +297,9 @@ public:
                     ordinal_t v = g.graph.entries(j);
                     if(constraint(i) != constraint(v)) continue;
                     if(well_conn(v) == 0) continue;
-                    scalar_t wgt = g.values(j);
+                    scalar_t wgt;
+                    if constexpr(uniform) wgt = 1;
+                    else wgt = g.values(j);
                     if(wgt >= multi*vtx_w(v)){
                         hn(i) = v;
                         return;
@@ -299,7 +309,9 @@ public:
                     ordinal_t v = g.graph.entries(j);
                     if(constraint(i) != constraint(v)) continue;
                     if(well_conn(v) == 0) continue;
-                    scalar_t wgt = g.values(j);
+                    scalar_t wgt;
+                    if constexpr(uniform) wgt = 1;
+                    else wgt = g.values(j);
                     if(wgt >= multi*vtx_w(v)){
                         hn(i) = v;
                         return;
@@ -396,7 +408,7 @@ public:
             if(order(i) == order(h)) hn(i) = i;
         });
         find_trees(vcmap, n, hn, order);
-        ensure_gamma_connectivity(wg, vcmap, constraint, order, rfd.total_deg, mem, rfd);
+        ensure_gamma_connectivity<uniform>(wg, vcmap, constraint, order, rfd.total_deg, mem, rfd);
         coarse_vtx_count = contigitize_clusters(vcmap, n);
 
         return vcmap;

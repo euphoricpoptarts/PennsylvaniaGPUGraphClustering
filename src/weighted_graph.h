@@ -12,6 +12,8 @@ struct weighted_graph {
 
     matrix_t mtx;
     wgt_vt vtx_w;
+    // if edge_uniform is true
+    // then it is unsafe to access mtx.values
     bool edge_uniform = true;
 };
 

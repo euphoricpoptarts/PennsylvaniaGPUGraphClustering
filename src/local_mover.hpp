@@ -135,6 +135,7 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
+template <bool uniform>
 vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem) {
     const matrix_t& g = wg.mtx;
     vtx_vt dest_part = mem.p_mem.dest_part;
@@ -158,7 +159,9 @@ vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_v
         // compute cut change
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
             ordinal_t v = g.graph.entries(j);
-            scalar_t wgt = g.values(j);
+            scalar_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
             if(prio(v) < prio(i)){
                 ordinal_t vpart = dest_part(v);
                 obj_change -= (vpart == p) ? wgt : 0;
@@ -374,8 +377,8 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     return moves;
 }
 
-//determines which vertices (if any) should be moved to another part to improve objective
-//8 kernels, 2 device-host syncs
+// determines which vertices (if any) should be moved to another part to improve objective
+// uniform should be true if and only if c_graph is the top level input graph, and that graph is uniformly edge-weighted
 template <bool uniform, bool constrained>
 vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
     const matrix_t& g = wg.mtx;
@@ -411,7 +414,9 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         edge_offset_t end = c_graph.graph.row_map(i+1);
         //finds potential destination as most connected part excluding p
         for(edge_offset_t j = start; j < end; j++){
-            scalar_t j_val = c_graph.values(j);
+            scalar_t j_val;
+            if constexpr(uniform) j_val = 1;
+            else j_val = c_graph.values(j);
             if(j_val > 0 && j_val >= b_conn){
                 ordinal_t px = c_graph.graph.entries(j);
                 if(constrained && constraint(px) != constraint(p)) continue;
@@ -452,7 +457,9 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
             ordinal_t argmax = NO_MOVE;
             //finds potential destination as most connected part excluding p
             for(edge_offset_t j = start + t.team_rank(); j < end; j += team_size){
-                scalar_t j_val = c_graph.values(j);
+                scalar_t j_val;
+                if constexpr(uniform) j_val = 1;
+                else j_val = c_graph.values(j);
                 if(j_val > 0 && j_val >= maxl){
                     ordinal_t px = c_graph.graph.entries(j);
                     if(constrained && constraint(px) != constraint(p)) continue;
@@ -1160,9 +1167,10 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
-            moves = candidates_and_destinations<uniform, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
-            moves = afterburner_filter<uniform>(moves, wg, part, curr_state, mem);
+            if(uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+            else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
             if(moves.extent(0) == 0) break;
+            moves = afterburner_filter<uniform>(moves, wg, part, curr_state, mem);
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
             perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
@@ -1205,7 +1213,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        moves = candidates_and_destinations<uniform, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
+        if(uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
+        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
 
         // move list needs to be in vtx2 or else bad things happen
         // that normally happens in the afterburner, which isn't called here
@@ -1215,7 +1224,7 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
 
         if(moves.extent(0) == 0) break;
         if(i > 0 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
-        moves = afterburner_filter_strict(wg, moves, part, curr_state, mem);
+        moves = afterburner_filter_strict<uniform>(wg, moves, part, curr_state, mem);
         if(moves.extent(0) == 0) break;
         perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
         //copy current partition and relevant data to output partition if following conditions pass

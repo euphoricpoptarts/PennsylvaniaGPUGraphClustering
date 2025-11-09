@@ -119,10 +119,15 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     vtx_mirror_t entries_m = Kokkos::create_mirror_view(entries);
     edge_view_t row_map(Kokkos::ViewAllocateWithoutInitializing("row map"), n + 1);
     edge_mirror_t row_map_m = Kokkos::create_mirror_view(row_map);
-    wgt_view_t values(Kokkos::ViewAllocateWithoutInitializing("values"), 2*m);
+    wgt_view_t values;
     wgt_mirror_t values_m;
-    if(has_ew){
+    if(has_ew && !uniform_ew) {
+        values = wgt_view_t(Kokkos::ViewAllocateWithoutInitializing("values"), 2*m);
         values_m = Kokkos::create_mirror_view(values);
+    } else if(has_ew){
+        std::cout << "INFO: This file has edge weights. The given objective function treats edge weights as unit uniform. Please see Objectives.md for more information." << std::endl;
+    } else {
+        uniform_ew = true;
     }
     edge_offset_t edges_read = 0;
     ordinal_t rows_read = 0;
@@ -167,12 +172,8 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     }
     Kokkos::deep_copy(row_map, row_map_m);
     Kokkos::deep_copy(entries, entries_m);
-    if(has_ew){
+    if(!uniform_ew){
         Kokkos::deep_copy(values, values_m);
-        uniform_ew = false;
-    } else {
-        Kokkos::deep_copy(values, 1);
-        uniform_ew = true;
     }
     graph_t g_graph(entries, row_map);
     g = matrix_t("input graph", n, values, g_graph);

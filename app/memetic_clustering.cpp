@@ -200,10 +200,9 @@ int main(int argc, char **argv) {
     //so that it falls out of scope b4 finalize
     {
         matrix_t g;
-        bool uniform_ew = false;
+        bool uniform_ew = uses_edge_weights(args);
         if(!load_graph(g, uniform_ew, args.graph_file.c_str())) return -1;
         std::cout << "Vertex Count: " << g.numRows() << "; Undirected Edge Count: " << g.nnz() / 2 << std::endl;
-        if(!uniform_ew) uniform_ew = sanitize_edge_weights(g, args);
         std::cout << std::endl;
 
         wg_t wg;
