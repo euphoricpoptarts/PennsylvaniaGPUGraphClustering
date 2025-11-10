@@ -247,6 +247,12 @@ wg_t build_coarse_graph(const wg_t curr_level,
 
     matrix_t g = curr_level.mtx;
     ordinal_t n = g.numRows();
+    double multiplier = 1.0;
+    if(nc > n * 0.5) multiplier = 1.5;
+    if(g.nnz() * multiplier > mem.p_mem.entries.extent(0)){
+        // rare edge-case
+        multiplier = 1.0;
+    }
 
     Kokkos::Timer timer;
 
@@ -260,7 +266,7 @@ wg_t build_coarse_graph(const wg_t curr_level,
     // allocate hash tables for each coarse vertex
     edge_offset_t hash_size = 0;
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
-        edge_offset_t val = hrow_map(i);
+        edge_offset_t val = hrow_map(i) * multiplier;
         if(final){
             hrow_map(i) = update;
         }
