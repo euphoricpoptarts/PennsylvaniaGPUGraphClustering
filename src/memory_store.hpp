@@ -35,6 +35,7 @@ struct memory_store {
         vtx_vt part, dest_part;
         vtx_vt order1, order2;
         vtx_vt dest_cache;
+        ordinal_t last_scan_mid, last_scan_large;
         ordinal_t offset_mid, offset_large;
 
         persistent(const matrix_t largest){

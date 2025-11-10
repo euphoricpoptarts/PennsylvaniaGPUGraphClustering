@@ -276,14 +276,9 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     const matrix_t& g = wg.mtx;
     ordinal_t n = g.numRows();
     float penalty_mod = rfd.get_penalty_modifier();
-    ordinal_t big_begin = mem.p_mem.offset_large;
+    // this must be set by candidates_and_destinations
+    ordinal_t big_begin = mem.p_mem.last_scan_large;
     ordinal_t n_moves = candidates.extent(0);
-    if(big_begin < n){
-        // this is entangled with jet_lp
-        big_begin = mem.s_mem.pin_host();
-    } else {
-        big_begin = n_moves;
-    }
     ordinal_t small = big_begin;
     ordinal_t big = n_moves - small;
     vtx_vt small_vtx = Kokkos::subview(candidates, std::make_pair(static_cast<ordinal_t>(0), small));
@@ -359,8 +354,12 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
             swap_bit(i) = 1;
         }
     });
+    vtx_pin_st pin_host = mem.s_mem.pin_host;
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, n_moves), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        if(final && i == big_begin){
+            pin_host() = update;
+        }
         if(swap_bit(candidates(i))){
             if(final){
                 vtx2(update) = candidates(i);
@@ -371,6 +370,12 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
+    if(big_begin < n_moves){
+        // this is entangled with jet_lp
+        mem.p_mem.last_scan_large = mem.s_mem.pin_host();
+    } else {
+        mem.p_mem.last_scan_large = mem.s_mem.scan_host();
+    }
     n_moves = mem.s_mem.scan_host();
     vtx_vt moves = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), n_moves));
 
@@ -515,6 +520,11 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     }, mem.s_mem.scan_host);
     exec_space().fence();
     num_pos = mem.s_mem.scan_host();
+    if(big_begin < n){
+        mem.p_mem.last_scan_large = mem.s_mem.pin_host();
+    } else {
+        mem.p_mem.last_scan_large = num_pos;
+    }
     //truncate scratch views by num_pos
     vtx_vt candidates = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
 
@@ -603,6 +613,76 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
+    ordinal_t affected_total = mem.s_mem.scan_host();
+    if(big_begin < g.numRows()){
+        // this is entangled with jet_lp
+        mem.p_mem.last_scan_mid = mem.s_mem.pin_host();
+    } else {
+        mem.p_mem.last_scan_mid = affected_total;
+    }
+    vtx1 = Kokkos::subview(vtx1, std::make_pair((ordinal_t)0, affected_total));
+    return vtx1;
+}
+
+vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
+    const matrix_t& g = wg.mtx;
+    ordinal_t total_moves = swaps.extent(0);
+    vtx_vt swap_bit = mem.s_mem.zeros1;
+    ordinal_t total = 0;
+    vtx_vt vtx1 = mem.s_mem.vtx1;
+    vtx_vt order1 = mem.p_mem.order1;
+    vtx_vt order2 = mem.p_mem.order2;
+    vtx_vt dest_cache = mem.p_mem.dest_part;
+    Kokkos::parallel_for("mark", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
+        ordinal_t i = swaps(x);
+        swap_bit(i) = 1;
+    });
+    // this must be set by afterburner_filter
+    ordinal_t big_begin = mem.p_mem.last_scan_large;
+    vtx_vt big_rows = Kokkos::subview(swaps, std::make_pair(big_begin, total_moves));
+    vtx_vt small_rows = Kokkos::subview(swaps, std::make_pair(static_cast<ordinal_t>(0), big_begin));
+    Kokkos::parallel_for("mark adjacent", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x){
+        ordinal_t i = small_rows(x);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            ordinal_t v = g.graph.entries(j);
+            swap_bit(v) = 1;
+        }
+    });
+    Kokkos::parallel_for("mark adjacent", team_policy_t(total_moves - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big_rows(t.league_rank());
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [=](const edge_offset_t j){
+            ordinal_t v = g.graph.entries(j);
+            swap_bit(v) = 1;
+        });
+    });
+
+    vtx_pin_st pin_host = mem.s_mem.pin_host;
+    big_begin = mem.p_mem.offset_mid;
+    // order2 is already organized into two buckets by degree > or <= 32
+    Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
+        if(final && x == big_begin){
+            pin_host() = update;
+        }
+        ordinal_t i = order2(x);
+        if(swap_bit(i)){
+            if(final){
+                vtx1(update) = i;
+                // reset to zero for next iteration
+                swap_bit(i) = 0;
+                dest_cache(i) = NULL_PART;
+            }
+            update++;
+        }
+    }, mem.s_mem.scan_host);
+    exec_space().fence();
+    ordinal_t affected_total = mem.s_mem.scan_host();
+    if(big_begin < g.numRows()){
+        // this is entangled with jet_lp
+        mem.p_mem.last_scan_mid = mem.s_mem.pin_host();
+    } else {
+        mem.p_mem.last_scan_mid = affected_total;
+    }
+    vtx1 = Kokkos::subview(vtx1, std::make_pair((ordinal_t)0, affected_total));
     return vtx1;
 }
 
@@ -610,19 +690,16 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
 template <bool uniform>
 void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = wg.mtx;
-    vtx_vt vtx1 = find_affected(wg, swaps, mem);
-    ordinal_t total = mem.s_mem.scan_host();
-    ordinal_t big_begin = mem.p_mem.offset_mid;
-    if(big_begin < g.numRows()){
-        big_begin = mem.s_mem.pin_host();
-    } else {
-        big_begin = total;
-    }
+    vtx_vt affected;
+    if(swaps.extent(0) > g.numRows() * 0.1) affected = find_affected(wg, swaps, mem);
+    else affected = find_affected_smaller(wg, swaps, mem);
+    ordinal_t total = affected.extent(0);
+    // this must be set by find_affected/find_affected_smaller
+    ordinal_t big_begin = mem.p_mem.last_scan_mid;
     ordinal_t small = big_begin;
     ordinal_t big = total - small;
-    // this logic is entangled with find_affected()
-    vtx_vt big_rows = Kokkos::subview(vtx1, std::make_pair(big_begin, total));
-    vtx_vt small_rows = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), small));
+    vtx_vt big_rows = Kokkos::subview(affected, std::make_pair(big_begin, total));
+    vtx_vt small_rows = Kokkos::subview(affected, std::make_pair(static_cast<ordinal_t>(0), small));
     wgt_vt pvals = mem.p_mem.pvals;
     int max_size = 512;
     //recompute conn tables for each vertex adjacent to a moved vertex
