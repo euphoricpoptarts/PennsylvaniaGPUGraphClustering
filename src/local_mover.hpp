@@ -690,8 +690,14 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
 template <bool uniform>
 void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem){
     const matrix_t& g = wg.mtx;
+    edge_offset_t affected_edges = 0;
+    Kokkos::parallel_reduce("sum degree", policy_t(0, swaps.extent(0)), KOKKOS_LAMBDA(const ordinal_t& x, edge_offset_t& update){
+        ordinal_t i = swaps(x);
+        update += g.graph.row_map(i+1) - g.graph.row_map(i);
+    }, affected_edges);
+    double affected_ratio = static_cast<double>(affected_edges) / static_cast<double>(g.nnz());
     vtx_vt affected;
-    if(swaps.extent(0) > g.numRows() * 0.1) affected = find_affected(wg, swaps, mem);
+    if(affected_ratio > 0.1) affected = find_affected(wg, swaps, mem);
     else affected = find_affected_smaller(wg, swaps, mem);
     ordinal_t total = affected.extent(0);
     // this must be set by find_affected/find_affected_smaller
