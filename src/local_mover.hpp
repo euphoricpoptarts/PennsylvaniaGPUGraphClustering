@@ -1153,13 +1153,21 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     cdata.init = false;
     cdata.conn_offsets = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
     cdata.conn_table_sizes = Kokkos::subview(mem.p_mem.cluster_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
-    Kokkos::parallel_for("comp conn row size", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i){
+    Kokkos::parallel_scan("comp conn offsets", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i, edge_offset_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
         if(!top) degree *= 1.2;
         if(degree > 2*label_count) degree = 2*label_count;
-        cdata.conn_offsets(i) = degree;
-        cdata.conn_table_sizes(i) = degree;
-    });
+        if(final){
+            cdata.conn_offsets(i) = update;
+            cdata.conn_table_sizes(i) = degree;
+        }
+        update += degree;
+        if(final && i + 1 == n){
+            cdata.conn_offsets(n) = update;
+        }
+    }, mem.s_mem.edge_scan_host);
+    exec_space().fence();
+    edge_offset_t gain_size = mem.s_mem.edge_scan_host();
     // rather than organizing vertices into 3 buckets
     // organize vertices into two different sets of two buckets each
     // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
@@ -1187,19 +1195,6 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
             order2(n - 1 - (i - update)) = i;
         }
     }, mem.p_mem.offset_mid);
-    edge_offset_t gain_size = 0;
-    Kokkos::parallel_scan("comp conn offsets", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i, edge_offset_t& update, const bool final){
-        edge_offset_t x = cdata.conn_offsets(i);
-        if(final){
-            cdata.conn_offsets(i) = update;
-        }
-        update += x;
-        if(final && i + 1 == n){
-            cdata.conn_offsets(n) = update;
-        }
-    }, mem.s_mem.edge_scan_host);
-    exec_space().fence();
-    gain_size = mem.s_mem.edge_scan_host();
     cdata.conn_vals = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.conn_entries = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.c_graph = matrix_t("conn graph", g.numRows(), g.numRows(), gain_size, cdata.conn_vals, cdata.conn_offsets, cdata.conn_entries);
