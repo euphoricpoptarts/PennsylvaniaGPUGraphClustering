@@ -52,6 +52,7 @@ using scalar_t = ordinal_t;
 using rfd_t = cluster_data<matrix_t>;
 using wg_t = weighted_graph<matrix_t>;
 
+template <bool uniform>
 void verify_objective(const wg_t wg, part_vt labels, const base_args args){
     const matrix_t g = wg.mtx;
     const wgt_view_t vtx_w = wg.vtx_w;
@@ -63,7 +64,10 @@ void verify_objective(const wg_t wg, part_vt labels, const base_args args){
         ordinal_t l = labels(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
             ordinal_t v = g.graph.entries(j);
-            if(l == labels(v)) update += g.values(j);
+            if(l == labels(v)){
+                if constexpr(uniform) update += 1;
+                else update += g.values(j);
+            }
         }
         Kokkos::atomic_add(&total(l), vtx_w(i));
 	}, uncut);
@@ -73,6 +77,22 @@ void verify_objective(const wg_t wg, part_vt labels, const base_args args){
     rfd->update_objective();
     rfd->print(std::cout);
     std::cout << std::endl;
+}
+
+void count_boundary(const wg_t wg, part_vt labels){
+    ordinal_t boundary = 0;
+    const matrix_t g = wg.mtx;
+    ordinal_t n = g.numRows();
+    Kokkos::parallel_reduce("count boundary", r_policy(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update){
+        ordinal_t l = labels(i);
+        ordinal_t cut = 0;
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
+            ordinal_t v = g.graph.entries(j);
+            if(l != labels(v)) cut++;
+        }
+        if(cut > 0) update++;
+	}, boundary);
+    std::cout << "Total boundary vertices: " << boundary << "/" << n << std::endl;
 }
 
 int main(int argc, char **argv) {
@@ -98,7 +118,9 @@ int main(int argc, char **argv) {
         part_vt part = load_view<part_vt>(g.numRows(), args.cluster_file.c_str());
 
         std::cout << std::setprecision(9);
-        verify_objective(wg, part, args);
+        if(wg.edge_uniform) verify_objective<true>(wg, part, args);
+        else verify_objective<false>(wg, part, args);
+        // count_boundary(wg, part);
     }
     Kokkos::finalize();
 
