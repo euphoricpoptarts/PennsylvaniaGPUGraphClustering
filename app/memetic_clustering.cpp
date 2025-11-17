@@ -17,13 +17,13 @@ using wg_t = weighted_graph<matrix_t>;
 using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
 
-part_vt intersection_cluster(part_vt c1, part_vt c2, int l2){
+vtx_view_t intersection_cluster(vtx_view_t c1, vtx_view_t c2, int l2){
 
     ordinal_t n = c1.extent(0);
-    part_vt htable("hash table", n);
+    vtx_view_t htable("hash table", n);
     Kokkos::deep_copy(htable, -1);
 
-    part_vt out("output constraint", n);
+    vtx_view_t out("output constraint", n);
     Kokkos::parallel_for("insert products", r_policy(0, n), KOKKOS_LAMBDA(const ordinal_t i) {
         ordinal_t a = c1(i);
         ordinal_t b = c2(i);
@@ -39,7 +39,7 @@ part_vt intersection_cluster(part_vt c1, part_vt c2, int l2){
         }
         out(i) = x;
     });
-    part_vt hval("hash vals", n);
+    vtx_view_t hval("hash vals", n);
     Kokkos::parallel_scan("get new ids", r_policy(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(htable(i) != -1){
             if(final){
@@ -55,12 +55,13 @@ part_vt intersection_cluster(part_vt c1, part_vt c2, int l2){
 }
 
 struct clustering {
-    part_vt clusters;
+    vtx_view_t clusters;
     double obj;
     int labels;
 };
 
-value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
+template <bool uniform>
+value_t get_cut_diff(matrix_t g, vtx_view_t c1, vtx_view_t c2, mem_t& mem){
     value_t cut1 = 0, cut2 = 0;
     ordinal_t n = c1.extent(0);
     ordinal_t low = mem.p_mem.offset_large;
@@ -71,8 +72,11 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
         ordinal_t i = vtx_low(x);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
             ordinal_t v = g.graph.entries(j);
-            if(c1[i] != c1[v] && c2[i] == c2[v]) update += g.values(j);
-            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += g.values(j);
+            value_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            if(c1[i] != c1[v] && c2[i] == c2[v]) update += wgt;
+            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += wgt;
         }
     }, cut1);
     Kokkos::parallel_reduce("count cut", policy(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t, value_t& global_update){
@@ -80,8 +84,11 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
         value_t local_sum = 0;
         Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [&](const edge_offset_t j, value_t& update){
             ordinal_t v = g.graph.entries(j);
-            if(c1[i] != c1[v] && c2[i] == c2[v]) update += g.values(j);
-            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += g.values(j);
+            value_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            if(c1[i] != c1[v] && c2[i] == c2[v]) update += wgt;
+            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += wgt;
         }, local_sum);
         Kokkos::single(Kokkos::PerTeam(t), [&](){
             global_update += local_sum;
@@ -90,7 +97,7 @@ value_t get_cut_diff(matrix_t g, part_vt c1, part_vt c2, mem_t& mem){
     return cut1 + cut2;
 }
 
-part_vt meme_cluster(wg_t wg, const meme_args args) {
+vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
 
     std::unique_ptr<rfd_t> objective = get_objective(wg, args);
     rfd_t& rfd = *objective;
@@ -101,8 +108,8 @@ part_vt meme_cluster(wg_t wg, const meme_args args) {
     int pop_size = args.pop_size;
     int time_limit = args.time_limit;
     for(int i = 0; i < pop_size; i++){
-        part_vt dummy_constraint;
-        part_vt c = cm_t::leiden_part<false>(mem, wg, rfd, dummy, dummy_constraint);
+        vtx_view_t dummy_constraint;
+        vtx_view_t c = cm_t::leiden_part<false>(mem, wg, rfd, dummy, dummy_constraint);
         clustering y;
         y.clusters = c;
         y.obj = rfd.get_objective();
@@ -135,9 +142,9 @@ part_vt meme_cluster(wg_t wg, const meme_args args) {
         }
         clustering c1 = pop[p1]; // choose parent 1
         clustering c2 = pop[p2]; // choose parent 2
-        part_vt constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
+        vtx_view_t constraint = intersection_cluster(c1.clusters, c2.clusters, c2.labels);
         // create offspring
-        part_vt c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
+        vtx_view_t c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
         std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
         for(int x = 0; x < 5; x++){
             c3 = cm_t::leiden_part<true>(mem, wg, rfd, dummy, c3);
@@ -154,8 +161,9 @@ part_vt meme_cluster(wg_t wg, const meme_args args) {
         for(int p = 0; p < pop_size; p++){
             double obj = pop[p].obj;
             if(obj < obj_max){
-                // value_t diff = uniform_dist3(e1);
-                value_t diff = get_cut_diff(wg.mtx, c3, pop[p].clusters, mem);
+                value_t diff;
+                if(wg.edge_uniform) diff = get_cut_diff<true>(wg.mtx, c3, pop[p].clusters, mem);
+                else diff = get_cut_diff<false>(wg.mtx, c3, pop[p].clusters, mem);
                 if(diff < min_diff){
                     min_diff = diff;
                     am = p;
@@ -210,7 +218,7 @@ int main(int argc, char **argv) {
         wg.vtx_w = get_vtx_weights(g, args);
         wg.edge_uniform = uniform_ew;
 
-        part_vt best_clusters = meme_cluster(wg, args);
+        vtx_view_t best_clusters = meme_cluster(wg, args);
         if(args.output_file.size() > 0){
             std::cout << "Writing best clustering to " << args.output_file << std::endl;
             write_part(best_clusters, args.output_file.c_str());

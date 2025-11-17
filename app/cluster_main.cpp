@@ -57,9 +57,9 @@ using mem_t = memory_store<matrix_t>;
 using cm_t = clustering_methods<matrix_t>;
 
 // checks how many components graph has after "deleting" cut edges of part_d
-void connected_comps(matrix_t g, part_vt part_d){
+void connected_comps(matrix_t g, vtx_view_t part_d){
     ordinal_t n = g.numRows();
-    part_mt comp_ids("component ids", n);
+    vtx_mirror_t comp_ids("component ids", n);
     auto part = Kokkos::create_mirror_view(part_d);
     Kokkos::deep_copy(part, part_d);
     Kokkos::deep_copy(comp_ids, -1);
@@ -105,7 +105,7 @@ bool iteration_termination_condition(const cluster_args args, std::unique_ptr<rf
     return terminate;
 }
 
-part_vt run_clustering(const wg_t wg,
+vtx_view_t run_clustering(const wg_t wg,
                     double& obj,
                     const cluster_args args,
                     ExperimentLoggerUtil<value_t>& experiment) {
@@ -114,11 +114,11 @@ part_vt run_clustering(const wg_t wg,
     Kokkos::fence();
     Kokkos::Timer iteration;
     std::cout << std::setprecision(6);
-    part_vt constraint;
+    vtx_view_t constraint;
 #ifdef LEIDEN
-    part_vt part = cm_t::leiden_part<false>(mem, wg, *rfd, experiment, constraint);
+    vtx_view_t part = cm_t::leiden_part<false>(mem, wg, *rfd, experiment, constraint);
 #else
-    part_vt part = cm_t::louvain_part<false>(mem, wg, *rfd, experiment, constraint);
+    vtx_view_t part = cm_t::louvain_part<false>(mem, wg, *rfd, experiment, constraint);
 #endif
     Kokkos::fence();
     double time = iteration.seconds();
@@ -163,14 +163,14 @@ int main(int argc, char **argv) {
         wg.mtx = g;
         wg.vtx_w = get_vtx_weights(g, args);
         wg.edge_uniform = uniform_ew;
-        part_vt best_clusters;
+        vtx_view_t best_clusters;
         double best_mod = -std::numeric_limits<double>::infinity();
         Kokkos::fence();
         for(int i = 0; i < args.n_trials; i++){
             ExperimentLoggerUtil<value_t> experiment;
             double mod;
             Kokkos::Timer total_time;
-            part_vt clusters = run_clustering(wg, mod, args, experiment);
+            vtx_view_t clusters = run_clustering(wg, mod, args, experiment);
             std::cout << "Total time: " << total_time.seconds() << std::endl;
             experiment.addMeasurement(Measurement::Total, total_time.seconds());
             std::cout << std::endl;

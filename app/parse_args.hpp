@@ -34,8 +34,8 @@ struct cluster_args : base_args {
 };
 
 struct meme_args : base_args {
-    int pop_size = 0;
-    int time_limit = 0;
+    int pop_size = 10;
+    int time_limit = 10;
 };
 
 void print_configuration_base(base_args args){
@@ -179,12 +179,12 @@ cluster_args parse_cluster_args(int argc, char** argv){
 
     if(given_options.count("-trials") != 0){
         args.n_trials = std::stoi(given_options["-trials"]);
-        if(args.n_trials < 1) args.n_trials = 1;
     }
+    if(args.n_trials < 1) args.n_trials = 1;
     if(given_options.count("-ex_iters") != 0){
         args.n_successive_iterations = std::stoi(given_options["-ex_iters"]);
-        if(args.n_successive_iterations < -1) args.n_successive_iterations = -1;
     }
+    if(args.n_successive_iterations < -1) args.n_successive_iterations = -1;
     if(given_options.count("-metrics") != 0){
         args.metrics_file = given_options["-metrics"];
     }
@@ -202,17 +202,17 @@ meme_args parse_meme_args(int argc, char** argv){
 
     if(given_options.count("-pop_size") != 0){
         args.pop_size = std::stoi(given_options["-pop_size"]);
-        if(args.pop_size < 10){
-            std::cout << "WARNING: Population size given as " << args.pop_size << " < 10. Setting population size to 10." << std::endl;
-            args.pop_size = 10;
-        }
+    }
+    if(args.pop_size < 10){
+        std::cout << "WARNING: Population size given as " << args.pop_size << " < 10. Setting population size to 10." << std::endl;
+        args.pop_size = 10;
     }
     if(given_options.count("-time_limit") != 0){
         args.time_limit = std::stoi(given_options["-time_limit"]);
-        if(args.time_limit < 10){
-            std::cout << "WARNING: Time limit given as " << args.time_limit << "s < 10s. Setting time limit to 10s." << std::endl;
-            args.time_limit = 10;
-        }
+    }
+    if(args.time_limit < 10){
+        std::cout << "WARNING: Time limit given as " << args.time_limit << "s < 10s. Setting time limit to 10s." << std::endl;
+        args.time_limit = 10;
     }
     print_configuration(args);
     verify_config(args);

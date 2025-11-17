@@ -181,10 +181,10 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     return true;
 }
 
-void write_part(part_vt part_d, const char *fname){
+void write_part(vtx_view_t part_d, const char *fname){
     std::ofstream ofp(fname);
     if(!ofp.is_open()) return;
-    part_mt part = Kokkos::create_mirror_view(part_d);
+    vtx_mirror_t part = Kokkos::create_mirror_view(part_d);
     Kokkos::deep_copy(part, part_d);
     size_t n = part.extent(0);
     std::stringstream ss;

@@ -20,8 +20,6 @@ struct memory_store {
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
     using vtx_pin_st = Kokkos::View<ordinal_t, Kokkos::SharedHostPinnedSpace>;
     using edge_pin_st = Kokkos::View<edge_offset_t, Kokkos::SharedHostPinnedSpace>;
-    using gain_pin_vt = Kokkos::View<gain_t*, Kokkos::SharedHostPinnedSpace>;
-    using gain_pin_st = Kokkos::View<gain_t, Kokkos::SharedHostPinnedSpace>;
     using obj_vt = Kokkos::View<float*, Device>;
 
     // this struct contains memory which either requires initialization or some degree of persistence

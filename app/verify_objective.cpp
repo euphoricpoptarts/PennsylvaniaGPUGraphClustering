@@ -53,7 +53,7 @@ using rfd_t = cluster_data<matrix_t>;
 using wg_t = weighted_graph<matrix_t>;
 
 template <bool uniform>
-void verify_objective(const wg_t wg, part_vt labels, const base_args args){
+void verify_objective(const wg_t wg, vtx_view_t labels, const base_args args){
     const matrix_t g = wg.mtx;
     const wgt_view_t vtx_w = wg.vtx_w;
     ordinal_t n = g.numRows();
@@ -79,7 +79,7 @@ void verify_objective(const wg_t wg, part_vt labels, const base_args args){
     std::cout << std::endl;
 }
 
-void count_boundary(const wg_t wg, part_vt labels){
+void count_boundary(const wg_t wg, vtx_view_t labels){
     ordinal_t boundary = 0;
     const matrix_t g = wg.mtx;
     ordinal_t n = g.numRows();
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
         wg.vtx_w = get_vtx_weights(g, args);
         wg.edge_uniform = uniform_ew;
 
-        part_vt part = load_view<part_vt>(g.numRows(), args.cluster_file.c_str());
+        vtx_view_t part = load_view<vtx_view_t>(g.numRows(), args.cluster_file.c_str());
 
         std::cout << std::setprecision(9);
         if(wg.edge_uniform) verify_objective<true>(wg, part, args);
