@@ -212,6 +212,9 @@ vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_v
         diff = result.val*2;
     }
     output_moves = Kokkos::subview(moves, std::make_pair((ordinal_t)0, truncate));
+    // this must be set for find_affected_smaller
+    // since we select a prefix of moves, we only need to adjust it when it is larger than the prefix length
+    if(mem.o_mem.last_scan_large > truncate) mem.o_mem.last_scan_large = truncate;
     return output_moves;
 }
 
@@ -601,11 +604,11 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     exec_space().fence();
     num_pos = mem.s_mem.scan_host();
     if(big_begin < n){
-        mem.o_mem.last_scan_large = mem.s_mem.pin_host();
+        mem.o_mem.last_scan_large = pin_host();
     } else {
         mem.o_mem.last_scan_large = num_pos;
     }
-    if(biggest_begin < g.numRows()){
+    if(biggest_begin < n){
         mem.o_mem.last_scan_large2 = pin_host2();
     } else {
         mem.o_mem.last_scan_large2 = num_pos;
