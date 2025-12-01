@@ -85,6 +85,7 @@ public:
     static constexpr ordinal_t NEW_PART = -4;
     static constexpr ordinal_t MID_CUTOFF = 32;
     static constexpr ordinal_t LARGE_CUTOFF = 128;
+    static constexpr ordinal_t MASSIVE_CUTOFF = 15000;
 
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -1365,7 +1366,6 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     }, mem.s_mem.edge_scan_host);
     exec_space().fence();
     edge_offset_t gain_size = mem.s_mem.edge_scan_host();
-    ordinal_t massive_cutoff = 10000;
     // rather than organizing vertices into 3 buckets
     // organize vertices into two different sets of two buckets each
     // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
@@ -1382,7 +1382,7 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     ordinal_t large = mem.o_mem.offset_large;
     Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= LARGE_CUTOFF && degree < massive_cutoff){
+        if(degree >= LARGE_CUTOFF && degree < MASSIVE_CUTOFF){
             if(final){
                 order1(large + update) = i;
             }
@@ -1393,7 +1393,7 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     ordinal_t large2 = mem.o_mem.offset_large2;
     Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= massive_cutoff){
+        if(degree >= MASSIVE_CUTOFF){
             if(final){
                 order1(large2 + update) = i;
             }
@@ -1413,7 +1413,7 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     ordinal_t mid = mem.o_mem.offset_mid;
     Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= MID_CUTOFF && degree < massive_cutoff){
+        if(degree >= MID_CUTOFF && degree < MASSIVE_CUTOFF){
             if(final){
                 order2(mid + update) = i;
             }
@@ -1424,7 +1424,7 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     ordinal_t mid2 = mem.o_mem.offset_mid2;
     Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= massive_cutoff){
+        if(degree >= MASSIVE_CUTOFF){
             if(final){
                 order2(mid2 + update) = i;
             }
