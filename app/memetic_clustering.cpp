@@ -64,10 +64,10 @@ template <bool uniform>
 value_t get_cut_diff(matrix_t g, vtx_view_t c1, vtx_view_t c2, mem_t& mem){
     value_t cut1 = 0, cut2 = 0;
     ordinal_t n = c1.extent(0);
-    ordinal_t low = mem.p_mem.offset_large;
+    ordinal_t low = mem.o_mem.offset_large;
     ordinal_t high = n - low;
-    vtx_view_t vtx_high = Kokkos::subview(mem.p_mem.order1, std::make_pair(low, n));
-    vtx_view_t vtx_low = Kokkos::subview(mem.p_mem.order1, std::make_pair(static_cast<ordinal_t>(0), low));
+    vtx_view_t vtx_high = Kokkos::subview(mem.o_mem.order1, std::make_pair(low, n));
+    vtx_view_t vtx_low = Kokkos::subview(mem.o_mem.order1, std::make_pair(static_cast<ordinal_t>(0), low));
     Kokkos::parallel_reduce("count cut", r_policy(0, low), KOKKOS_LAMBDA(const ordinal_t x, value_t& update){
         ordinal_t i = vtx_low(x);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){

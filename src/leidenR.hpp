@@ -89,8 +89,8 @@ public:
             update += val;
         });
         float gamma = rfd.get_penalty_modifier();
-        vtx_vt order1 = mem.p_mem.order1;
-        ordinal_t big_begin = mem.p_mem.offset_large;
+        vtx_vt order1 = mem.o_mem.order1;
+        ordinal_t big_begin = mem.o_mem.offset_large;
         vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
         vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, n));
         Kokkos::parallel_for("compute inner_conn", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x) {
@@ -320,8 +320,8 @@ public:
                 hn(i) = i;
             });
         } else {
-            vtx_vt order1 = mem.p_mem.order1;
-            ordinal_t big_begin = mem.p_mem.offset_large;
+            vtx_vt order1 = mem.o_mem.order1;
+            ordinal_t big_begin = mem.o_mem.offset_large;
             vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
             vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, n));
             Kokkos::parallel_for("select heaviest edge (low degree)", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x){

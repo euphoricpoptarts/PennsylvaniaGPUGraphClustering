@@ -31,10 +31,7 @@ struct memory_store {
         obj_vt obj_persistent;
         wgt_vt pvals, pvals_clone;
         vtx_vt part, dest_part;
-        vtx_vt order1, order2;
         vtx_vt dest_cache;
-        ordinal_t last_scan_mid, last_scan_large;
-        ordinal_t offset_mid, offset_large;
 
         persistent(const matrix_t largest){
             ordinal_t n = largest.numRows();
@@ -48,6 +45,15 @@ struct memory_store {
             dest_part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
             dest_cache = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
+        }
+    };
+
+    struct ordering {
+        vtx_vt order1, order2;
+        ordinal_t last_scan_mid, last_scan_mid2, last_scan_large, last_scan_large2;
+        ordinal_t offset_mid, offset_mid2, offset_large, offset_large2;
+
+        ordering(const ordinal_t n){
             order1 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 1"), n);
             order2 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 2"), n);
         }
@@ -56,7 +62,7 @@ struct memory_store {
     // this struct contains memory which can be used as-is
     struct scratch {
         vtx_vt vtx1, vtx2, zeros1;
-        vtx_pin_st scan_host, pin_host;
+        vtx_pin_st scan_host, pin_host, pin_host2;
         edge_pin_st edge_scan_host;
 
         scratch(const ordinal_t n) {
@@ -66,15 +72,18 @@ struct memory_store {
             scan_host = vtx_pin_st("scan host");
             edge_scan_host = edge_pin_st("edge scan host");
             pin_host = vtx_pin_st("pin host");
+            pin_host2 = vtx_pin_st("pin host 2");
         }
     };
 
     persistent p_mem;
     scratch s_mem;
+    ordering o_mem;
     cluster_data<matrix_t> spare_cluster_data;
 
     memory_store(const matrix_t largest, cluster_data<matrix_t>& clone_target) :
-        p_mem(largest), 
+        p_mem(largest),
         s_mem(largest.numRows()),
+        o_mem(largest.numRows()),
         spare_cluster_data(clone_target) {}
 };
