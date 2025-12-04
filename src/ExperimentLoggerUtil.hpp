@@ -166,7 +166,6 @@ public:
 				f << "\"iter-obj-" << i << "\":" << iter_obj[i] << ",";
 			}
 			f << "\"number-coarse-levels\":" << numCoarseLevels;
-			f << "]";
 			f << "}";
 			if (!last) {
 				f << ",";
