@@ -124,6 +124,8 @@ vtx_view_t run_clustering(const wg_t wg,
     double time = iteration.seconds();
     std::cout << "Cluster time: " << time << "; " << *rfd << std::endl;
     iteration.reset();
+    experiment.add_iter_time(time);
+    experiment.add_iter_obj(rfd->get_objective());
     double last_obj = -std::numeric_limits<double>::infinity();
     int counter = 0;
     while(!iteration_termination_condition(args, rfd, last_obj, counter)){
@@ -137,6 +139,8 @@ vtx_view_t run_clustering(const wg_t wg,
         time = iteration.seconds();
         std::cout << "Cluster time: " << time << "; " << *rfd << std::endl;
         iteration.reset();
+        experiment.add_iter_time(time);
+        experiment.add_iter_obj(rfd->get_objective());
     }
     experiment.setModularity(rfd->get_objective());
     experiment.setEdgeCut((wg.mtx.nnz() - rfd->uncut) / 2);

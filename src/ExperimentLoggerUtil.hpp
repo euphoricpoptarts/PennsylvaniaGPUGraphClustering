@@ -94,6 +94,8 @@ public:
 private:
 	int numCoarseLevels = 0;
 	std::vector<CoarseLevel> coarseLevels;
+	std::vector<double> iter_times;
+	std::vector<double> iter_obj;
     scalar_t edge_cut = 0;
     double modularity = -1.0;
 	int64_t t_nnz = 0;
@@ -133,6 +135,14 @@ public:
 		level_count = _level_count;
 	}
 
+	void add_iter_time(double iter_time){
+		iter_times.push_back(iter_time);
+	}
+
+	void add_iter_obj(double obj){
+		iter_obj.push_back(obj);
+	}
+
 	void log(const char* filename, bool first, bool last) {
 		std::ofstream f;
 		f.open(filename, std::ios::app);
@@ -149,7 +159,14 @@ public:
 			for (int i = 0; i < static_cast<int>(Measurement::END); i++) {
 				f << "\"" << measurementNames[i] << "-duration-seconds\":" << measurements[i] << ",";
 			}
+			for(size_t i = 0; i < iter_times.size(); i++){
+				f << "\"iter-times-" << i << "\":" << iter_times[i] << ",";
+			}
+			for(size_t i = 0; i < iter_obj.size(); i++){
+				f << "\"iter-obj-" << i << "\":" << iter_obj[i] << ",";
+			}
 			f << "\"number-coarse-levels\":" << numCoarseLevels;
+			f << "]";
 			f << "}";
 			if (!last) {
 				f << ",";
