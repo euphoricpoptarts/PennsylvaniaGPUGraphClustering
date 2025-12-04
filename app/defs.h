@@ -42,16 +42,8 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 
-#if defined(SGPAR_HUGEGRAPHS)
-typedef int64_t ordinal_t;
-typedef int64_t edge_offset_t;
-#elif defined(SGPAR_LARGEGRAPHS)
-typedef int32_t ordinal_t;
-typedef int64_t edge_offset_t;
-#else
 typedef int32_t ordinal_t;
 typedef int32_t edge_offset_t;
-#endif
 typedef edge_offset_t value_t;
 struct config_t {
     int coarsening_alg;
