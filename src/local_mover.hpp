@@ -1201,10 +1201,164 @@ void init_conn_graph(const wg_t& wg, const vtx_vt& part, cdata_t& cdata, mem_t& 
     Kokkos::parallel_for("init conn (small rows)", policy_t(0, mem.o_mem.offset_mid), small_update);
 }
 
+struct wrapper {
+    static const int N = 5;
+    ordinal_t value[N];
+
+    KOKKOS_INLINE_FUNCTION
+    wrapper() {
+        init();
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    wrapper(const wrapper& rhs) {
+        for(ordinal_t i = 0; i < N; i++) value[i] = rhs.value[i];
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    void init() {
+        for(ordinal_t i = 0; i < N; i++) value[i] = 0;
+    }
+};
+
+template <class Space>
+struct SumMyArray {
+ public:
+  // Required
+  typedef SumMyArray reducer;
+  typedef wrapper value_type;
+  typedef Kokkos::View<value_type*, Space, Kokkos::MemoryUnmanaged>
+      result_view_type;
+
+ private:
+  value_type& value;
+
+ public:
+  KOKKOS_INLINE_FUNCTION
+  SumMyArray(value_type& _value) : value(_value) {}
+
+  // Required
+  KOKKOS_INLINE_FUNCTION
+  void join(value_type& dest, const value_type& src) const {
+    for(ordinal_t i = 0; i < dest.N; i++) dest.value[i] += src.value[i];
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  void init(value_type& val) const {
+    val.init();
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  value_type& reference() const { return value; }
+
+  KOKKOS_INLINE_FUNCTION
+  result_view_type view() const { return result_view_type(&value, 1); }
+
+  KOKKOS_INLINE_FUNCTION
+  bool references_scalar() const { return true; }
+};
+
+struct ScanMyArray {
+ public:
+  // Required
+  typedef ScanMyArray reducer;
+  typedef wrapper value_type;
+
+ private:
+  matrix_t g;
+  vtx_vt order1, order2;
+  wrapper offsets;
+
+ public:
+  ScanMyArray(matrix_t _g,
+    vtx_vt _order1,
+    vtx_vt _order2,
+    wrapper _offsets) : 
+    g(_g),
+    order1(_order1),
+    order2(_order2),
+    offsets(_offsets) {}
+
+  // Required
+  KOKKOS_INLINE_FUNCTION
+  void join(value_type& dest, const value_type& src) const {
+    for(ordinal_t i = 0; i < dest.N; i++) dest.value[i] += src.value[i];
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  void init(value_type& val) const {
+    val.init();
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const ordinal_t i, wrapper& update, const bool final) const {
+        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
+        if(degree < LARGE_CUTOFF){
+            if(final) order1(offsets.value[0] + update.value[0]) = i;
+            update.value[0]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            if(final) order1(offsets.value[1] + update.value[1]) = i;
+            update.value[1]++;
+        } else {
+            if(final) {
+                order1(offsets.value[4] + update.value[4]) = i;
+                order2(offsets.value[4] + update.value[4]) = i;
+            }
+            update.value[4]++;
+        }
+        if(degree < MID_CUTOFF){
+            if(final) order2(offsets.value[2] + update.value[2]) = i;
+            update.value[2]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            if(final) order2(offsets.value[3] + update.value[3]) = i;
+            update.value[3]++;
+        }
+  }
+};
+
+// buckets vertices by degree, whilst maintaining natural order within each bucket
+// generates two such orderings, only differing in the cutoff separating the first and second buckets
+void generate_orderings(mem_t& mem, const wg_t& wg) {
+    const matrix_t g = wg.mtx;
+    ordinal_t n = g.numRows();
+    vtx_vt order1 = mem.o_mem.order1;
+    vtx_vt order2 = mem.o_mem.order2;
+    wrapper bucket_sizes;
+    typedef SumMyArray<Kokkos::HostSpace> ArraySumResult;
+
+    Kokkos::parallel_reduce("sum bucket sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, wrapper& update) {
+        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
+        if(degree < LARGE_CUTOFF){
+            update.value[0]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            update.value[1]++;
+        } else {
+            update.value[4]++;
+        }
+        if(degree < MID_CUTOFF){
+            update.value[2]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            update.value[3]++;
+        }
+    }, ArraySumResult(bucket_sizes));
+    wrapper offsets(bucket_sizes);
+    offsets.value[0] = 0;
+    offsets.value[1] = bucket_sizes.value[0];
+    offsets.value[2] = 0;
+    offsets.value[3] = bucket_sizes.value[2];
+    offsets.value[4] = bucket_sizes.value[0] + bucket_sizes.value[1];
+    mem.o_mem.offset_large = offsets.value[1];
+    mem.o_mem.offset_mid = offsets.value[3];
+    mem.o_mem.offset_large2 = offsets.value[4];
+    mem.o_mem.offset_mid2 = offsets.value[4];
+    Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(g, order1, order2, offsets));
+}
+
 //initializes datastructures
 cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool top){
     const matrix_t g = wg.mtx;
     ordinal_t n = g.numRows();
+    generate_orderings(mem, wg);
     cdata_t cdata;
     cdata.init = false;
     cdata.conn_offsets = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
@@ -1224,71 +1378,6 @@ cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool 
     }, mem.s_mem.edge_scan_host);
     exec_space().fence();
     edge_offset_t gain_size = mem.s_mem.edge_scan_host();
-    // rather than organizing vertices into 3 buckets
-    // organize vertices into two different sets of two buckets each
-    // I found that the performance of using 3 buckets was worse (likely due to poorer cache utilization)
-    vtx_vt order1 = mem.o_mem.order1;
-    Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree < LARGE_CUTOFF){
-            if(final){
-                order1(update) = i;
-            }
-            update++;
-        }
-    }, mem.o_mem.offset_large);
-    ordinal_t large = mem.o_mem.offset_large;
-    Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= LARGE_CUTOFF && degree < MASSIVE_CUTOFF){
-            if(final){
-                order1(large + update) = i;
-            }
-            update++;
-        }
-    }, mem.o_mem.offset_large2);
-    mem.o_mem.offset_large2 += large;
-    ordinal_t large2 = mem.o_mem.offset_large2;
-    Kokkos::parallel_scan("generate order1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= MASSIVE_CUTOFF){
-            if(final){
-                order1(large2 + update) = i;
-            }
-            update++;
-        }
-    });
-    vtx_vt order2 = mem.o_mem.order2;
-    Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree < MID_CUTOFF){
-            if(final){
-                order2(update) = i;
-            }
-            update++;
-        }
-    }, mem.o_mem.offset_mid);
-    ordinal_t mid = mem.o_mem.offset_mid;
-    Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= MID_CUTOFF && degree < MASSIVE_CUTOFF){
-            if(final){
-                order2(mid + update) = i;
-            }
-            update++;
-        }
-    }, mem.o_mem.offset_mid2);
-    mem.o_mem.offset_mid2 += mid;
-    ordinal_t mid2 = mem.o_mem.offset_mid2;
-    Kokkos::parallel_scan("generate order2", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
-        if(degree >= MASSIVE_CUTOFF){
-            if(final){
-                order2(mid2 + update) = i;
-            }
-            update++;
-        }
-    });
     cdata.conn_vals = Kokkos::subview(mem.p_mem.vals, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.conn_entries = Kokkos::subview(mem.p_mem.entries, std::make_pair(static_cast<edge_offset_t>(0), gain_size));
     cdata.c_graph = matrix_t("conn graph", g.numRows(), g.numRows(), gain_size, cdata.conn_vals, cdata.conn_offsets, cdata.conn_entries);
