@@ -324,12 +324,15 @@ public:
             ordinal_t big_begin = mem.o_mem.offset_large;
             vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
             vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, n));
+            ordinal_t seed = rd();
             Kokkos::parallel_for("select heaviest edge (low degree)", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x){
                 ordinal_t i = small_vtx(x);
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
                 float multi = gamma*vtx_w(i);
-                if(well_conn(i) == 0){
+                hasher_t hash;
+                // 0.0001 chance to self-aggregate
+                if(hash(seed + i) % 10000 == 0 || well_conn(i) == 0){
                     hn(i) = i;
                     return;
                 }
@@ -342,9 +345,13 @@ public:
                     if(well_conn(v) == 0) continue;
                     scalar_t wgt = g.values(j);
                     float val = static_cast<float>(wgt) - multi*vtx_w(v);
-                    if(val >= m){
-                        m = val;
-                        am = j;
+                    if(val >= 0){
+                        float sample = Kokkos::abs(static_cast<float>(hash(seed + j)) / static_cast<float>(ORD_MAX));
+                        sample = sample*Kokkos::pow(val, 4);
+                        if(sample >= m){
+                            m = sample;
+                            am = j;
+                        }
                     }
                 
                 }
@@ -360,7 +367,9 @@ public:
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
                 float multi = gamma*vtx_w(i);
-                if(well_conn(i) == 0){
+                hasher_t hash;
+                // 0.0001 chance to self-aggregate
+                if(hash(seed + i) % 10000 == 0 || well_conn(i) == 0){
                     hn(i) = i;
                     return;
                 }
@@ -372,9 +381,13 @@ public:
                     if(well_conn(v) == 0) return;
                     scalar_t wgt = g.values(idx);
                     float val = static_cast<float>(wgt) - multi*vtx_w(v);
-                    if(val >= local.val){
-                        local.val = val;
-                        local.loc = idx;
+                    if(val >= 0){
+                        float sample = Kokkos::abs(static_cast<float>(hash(seed + idx)) / static_cast<float>(ORD_MAX));
+                        sample = sample*Kokkos::pow(val, 4);
+                        if(sample >= local.val){
+                            local.val = sample;
+                            local.loc = idx;
+                        }
                     }
                 
                 }, argmax_reducer_t(argmax));
