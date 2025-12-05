@@ -44,7 +44,6 @@ struct memory_store {
             pvals_clone = wgt_vt(Kokkos::ViewAllocateWithoutInitializing("p vals clone"), n);
             dest_part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("destination scratch"), n);
             part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("part scratch"), n);
-            dest_cache = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("best connected part for each vertex"), n);
         }
     };
 
