@@ -56,45 +56,56 @@ vtx_view_t intersection_cluster(vtx_view_t c1, vtx_view_t c2, int l2){
 
 struct clustering {
     vtx_view_t clusters;
+    Kokkos::View<uint32_t*, Device> signature;
     double obj;
     int labels;
 };
 
-template <bool uniform>
-value_t get_cut_diff(matrix_t g, vtx_view_t c1, vtx_view_t c2, mem_t& mem){
-    value_t cut1 = 0, cut2 = 0;
-    ordinal_t n = c1.extent(0);
+// each set-bit indicates a cut-edge
+Kokkos::View<uint32_t*, Device> gen_signature(matrix_t g, vtx_view_t c, mem_t& mem){
+    edge_offset_t sign_size = (g.nnz() + 31) / 32;
+    Kokkos::View<uint32_t*, Device> sign("signature", sign_size);
+    ordinal_t n = g.numRows();
     ordinal_t low = mem.o_mem.offset_large;
     ordinal_t high = n - low;
+    // orderings should be valid because leiden+ will set them for the top level
     vtx_view_t vtx_high = Kokkos::subview(mem.o_mem.order1, std::make_pair(low, n));
     vtx_view_t vtx_low = Kokkos::subview(mem.o_mem.order1, std::make_pair(static_cast<ordinal_t>(0), low));
-    Kokkos::parallel_reduce("count cut", r_policy(0, low), KOKKOS_LAMBDA(const ordinal_t x, value_t& update){
+    Kokkos::parallel_for("create signature", r_policy(0, low), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = vtx_low(x);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
             ordinal_t v = g.graph.entries(j);
-            value_t wgt;
-            if constexpr(uniform) wgt = 1;
-            else wgt = g.values(j);
-            if(c1[i] != c1[v] && c2[i] == c2[v]) update += wgt;
-            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += wgt;
+            if(c[i] != c[v]){
+                edge_offset_t sign_offset = j / 32;
+                int bit_offset = j & 31;
+                uint32_t setbit = 1u << bit_offset;
+                Kokkos::atomic_or(&sign(sign_offset), setbit);
+            }
         }
-    }, cut1);
-    Kokkos::parallel_reduce("count cut", policy(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t, value_t& global_update){
+    });
+    Kokkos::parallel_for("create signature", policy(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = vtx_high(t.league_rank());
-        value_t local_sum = 0;
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [&](const edge_offset_t j, value_t& update){
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [&](const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
-            value_t wgt;
-            if constexpr(uniform) wgt = 1;
-            else wgt = g.values(j);
-            if(c1[i] != c1[v] && c2[i] == c2[v]) update += wgt;
-            else if(c1[i] == c1[v] && c2[i] != c2[v]) update += wgt;
-        }, local_sum);
-        Kokkos::single(Kokkos::PerTeam(t), [&](){
-            global_update += local_sum;
+            if(c[i] != c[v]){
+                edge_offset_t sign_offset = j / 32;
+                int bit_offset = j & 31;
+                uint32_t setbit = 1u << bit_offset;
+                Kokkos::atomic_or(&sign(sign_offset), setbit);
+            }
         });
-    }, cut2);
-    return cut1 + cut2;
+    });
+    return sign;
+}
+
+value_t get_cut_diff(Kokkos::View<uint32_t*, Device> sign1, Kokkos::View<uint32_t*, Device> sign2){
+    edge_offset_t chunks = sign1.extent(0);
+    value_t diff = 0;
+    Kokkos::parallel_reduce("compare signatures", r_policy(0, chunks), KOKKOS_LAMBDA(const edge_offset_t x, value_t& update){
+        uint32_t chunk_xor = sign1(x) ^ sign2(x);
+        update += Kokkos::popcount(chunk_xor);
+    }, diff);
+    return diff;
 }
 
 vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
@@ -114,6 +125,7 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
         y.clusters = c;
         y.obj = rfd.get_objective();
         y.labels = rfd.label_count;
+        y.signature = gen_signature(wg.mtx, c, mem);
         std::cout << "Adding clustering with obj: " << rfd.get_objective() << std::endl;
         pop.push_back(y);
         rfd.reset(wg.mtx, wg.vtx_w);
@@ -158,12 +170,11 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
         int am = -1;
         double obj_max = rfd.get_objective();
         value_t min_diff = std::numeric_limits<value_t>::max();
+        Kokkos::View<uint32_t*, Device> signature = gen_signature(wg.mtx, c3, mem);
         for(int p = 0; p < pop_size; p++){
             double obj = pop[p].obj;
             if(obj < obj_max){
-                value_t diff;
-                if(wg.edge_uniform) diff = get_cut_diff<true>(wg.mtx, c3, pop[p].clusters, mem);
-                else diff = get_cut_diff<false>(wg.mtx, c3, pop[p].clusters, mem);
+                value_t diff = get_cut_diff(signature, pop[p].signature);
                 if(diff < min_diff){
                     min_diff = diff;
                     am = p;
@@ -174,6 +185,7 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
             pop[am].clusters = c3;
             pop[am].obj = rfd.get_objective();
             pop[am].labels = rfd.label_count;
+            pop[am].signature = signature;
         } else {
             min_diff = 0;
         }
