@@ -5,6 +5,7 @@
 #include "ExperimentLoggerUtil.hpp"
 #include "leidenR.hpp"
 #include "weighted_graph.h"
+#include "ordering.hpp"
 
 namespace jet_community {
 
@@ -30,6 +31,7 @@ public:
     using rfd_t = cluster_data<matrix_t>;
     using lr_t = leidenR<matrix_t, ordinal_t>;
     using lm_t = local_move_heuristic<matrix_t>;
+    using order = ordering<matrix_t>;
 
     static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
         Kokkos::parallel_for("set v weights", policy_t(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){
@@ -62,6 +64,8 @@ public:
             wg_t c = levels[levels.size() - 1];
             // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
+            // orderings must be generated for use in local_move and build_coarse_graph
+            order::generate_orderings(mem, c.mtx);
             if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
             else local_mover.template local_move<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             if(old_obj == rfd.obj){
@@ -119,6 +123,7 @@ public:
                 fine_part(x) = coarse_part(fine_part(x));
             });
     #ifdef LEIDEN_PLUS
+            order::generate_orderings(mem, c.mtx);
             if(c.edge_uniform) local_mover.template local_move<true, false>(c, fine_part, rfd, false, mem, part);
             else local_mover.template local_move<false, false>(c, fine_part, rfd, false, mem, part);
     #endif
@@ -142,6 +147,8 @@ public:
             Kokkos::parallel_for("set initial assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = x;
             });
+            // orderings must be generated for use in local_move and build_coarse_graph
+            order::generate_orderings(mem, c.mtx);
             if(c.edge_uniform) local_mover.template local_move<true, constrained>(c, part, rfd, true, mem, constraint);
             else local_mover.template local_move<false, constrained>(c, part, rfd, true, mem, constraint);
             // the user clearly cares about quality if they are doing multiple iterations
@@ -201,6 +208,7 @@ public:
             Kokkos::parallel_for("update top level assignments", r_policy(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = coarse_part(part(x));
             });
+            order::generate_orderings(mem, c.mtx);
             if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, false, mem, constraint);
             else local_mover.template local_move<false, false>(c, part, rfd, false, mem, constraint);
         }

@@ -1204,7 +1204,6 @@ void init_conn_graph(const wg_t& wg, const vtx_vt& part, cdata_t& cdata, mem_t& 
 cdata_t truncate_and_init_mem(mem_t& mem, const wg_t& wg, int label_count, bool top){
     const matrix_t g = wg.mtx;
     ordinal_t n = g.numRows();
-    ordering<matrix_t>::generate_orderings(mem, g);
     cdata_t cdata;
     cdata.init = false;
     cdata.conn_offsets = Kokkos::subview(mem.p_mem.row_map, std::make_pair(static_cast<ordinal_t>(0), n + 1));
@@ -1347,7 +1346,7 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
             std::cout << "Expected pre-normalization diff: " << expected_diff << "; Actual pre-normalization diff: " << curr_state.obj - best_state.obj << std::endl;
         }
         vtx_vt dest_part_init_subview = Kokkos::subview(mem.p_mem.dest_part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
-        // reset this cache because it causes accuracy problems in ensure_improvement
+        // reset this cache because it causes accuracy problems in afterburner_filter_strict
         Kokkos::deep_copy(exec_space(), dest_part_init_subview, NULL_PART);
     }
     relabel_contiguously(best_part, best_state, mem);
