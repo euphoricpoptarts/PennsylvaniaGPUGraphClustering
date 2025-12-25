@@ -29,7 +29,7 @@ public:
     using contracter_t = contracter<matrix_t>;
     using wg_t = weighted_graph<matrix_t>;
     using rfd_t = cluster_data<matrix_t>;
-    using lr_t = leidenR<matrix_t, ordinal_t>;
+    using lr_t = leidenR<matrix_t>;
     using lm_t = local_move_heuristic<matrix_t>;
     using order = ordering<matrix_t>;
 

@@ -11,7 +11,7 @@
 
 namespace jet_community {
 
-template<class crsMat, typename part_t>
+template<class crsMat>
 class leidenR {
 public:
     // define internal types
@@ -24,7 +24,6 @@ public:
     using vtx_vt = typename Kokkos::View<ordinal_t*, Device>;
     using edge_vt = Kokkos::View<edge_offset_t*, Device>;
     using wgt_vt = typename Kokkos::View<scalar_t*, Device>;
-    using part_vt = typename Kokkos::View<part_t*, Device>;
     using policy_t = typename Kokkos::RangePolicy<exec_space>;
     using team_policy_t = typename Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
@@ -41,7 +40,7 @@ public:
     static constexpr ordinal_t split = 1000000000;
 
     template <bool uniform>
-    static void ensure_gamma_connectivity(const wg_t wg, part_vt vcmap, part_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
+    static void ensure_gamma_connectivity(const wg_t wg, vtx_vt vcmap, vtx_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
         const matrix_t g = wg.mtx;
         const wgt_vt vtx_w = wg.vtx_w;
@@ -175,7 +174,7 @@ public:
     }
 
     // reassigns cluster labels into a contiguous range beginning from 0
-    static ordinal_t contigitize_clusters(part_vt vcmap, const ordinal_t n) {
+    static ordinal_t contigitize_clusters(vtx_vt vcmap, const ordinal_t n) {
         ordinal_t nc = 0;
         Kokkos::parallel_scan("assign contiguous id", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
             // every cluster with label "u" must contain vertex "u"
@@ -198,7 +197,7 @@ public:
     }
 
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    static void find_trees(part_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
+    static void find_trees(vtx_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
 
         // compute connected components on the forest induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
@@ -249,8 +248,8 @@ public:
 
     // uniform is true only if top is true
     template <bool top, bool uniform>
-    static part_vt coarsen_leidenR(const wg_t wg,
-        const part_vt& constraint,
+    static vtx_vt coarsen_leidenR(const wg_t wg,
+        const vtx_vt& constraint,
         mem_t& mem,
         const refine_data& rfd,
         int& coarse_vtx_count) {
@@ -260,7 +259,7 @@ public:
         ordinal_t n = g.numRows();
         float gamma = rfd.get_penalty_modifier();
         vtx_vt hn = Kokkos::subview(mem.s_mem.vtx1, std::make_pair(static_cast<ordinal_t>(0), n));
-        part_vt vcmap("vcmap", n);
+        vtx_vt vcmap("vcmap", n);
         Kokkos::deep_copy(exec_space(), vcmap, ORD_MAX);
 
         vtx_vt well_conn = Kokkos::subview(mem.p_mem.cluster_sizes, std::make_pair(static_cast<ordinal_t>(0), n));
