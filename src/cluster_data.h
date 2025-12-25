@@ -2,8 +2,8 @@
 #include <Kokkos_Core.hpp>
 #include <iostream>
 #include <cstdint>
+#include "core_types.h"
 
-template <typename matrix_t>
 struct cluster_data {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
@@ -104,24 +104,23 @@ struct cluster_data {
 };
 
 // these derived classes manage the calculation of lambda and normalizing of the objective
-template <typename matrix_t>
-struct modularity : public cluster_data<matrix_t> {
+struct modularity : public cluster_data {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
 
     double inv_gdeg = 0;
 
-    modularity(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+    modularity(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool uniform) : cluster_data(g, wdeg, 1.0) {
         scalar_t g_deg = 0;
         if(uniform) g_deg = g.nnz();
-        else g_deg = cluster_data<matrix_t>::sum(wdeg);
+        else g_deg = cluster_data::sum(wdeg);
         inv_gdeg = 1.0 / static_cast<double>(g_deg);
-        cluster_data<matrix_t>::lambda = _penalty_scale * inv_gdeg;
+        cluster_data::lambda = _penalty_scale * inv_gdeg;
     }
 
     virtual double get_objective() const override {
-        return cluster_data<matrix_t>::obj * inv_gdeg;
+        return cluster_data::obj * inv_gdeg;
     }
 
     virtual void print(std::ostream& os) const override {
@@ -131,21 +130,20 @@ struct modularity : public cluster_data<matrix_t> {
     virtual ~modularity(){}
 };
 
-template <typename matrix_t>
-struct constant_potts : public cluster_data<matrix_t> {
+struct constant_potts : public cluster_data {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
 
     scalar_t v_total = 0;
 
-    constant_potts(const matrix_t g, const wgt_vt wdeg, double _penalty_scale) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+    constant_potts(const matrix_t g, const wgt_vt wdeg, double _penalty_scale) : cluster_data(g, wdeg, 1.0) {
         v_total = g.numRows();
-        cluster_data<matrix_t>::lambda = _penalty_scale * 0.5;
+        cluster_data::lambda = _penalty_scale * 0.5;
     }
 
     virtual double get_objective() const override {
-        return cluster_data<matrix_t>::obj + cluster_data<matrix_t>::lambda*v_total;
+        return cluster_data::obj + cluster_data::lambda*v_total;
     }
 
     virtual void print(std::ostream& os) const override {
@@ -155,24 +153,23 @@ struct constant_potts : public cluster_data<matrix_t> {
     virtual ~constant_potts(){}
 };
 
-template <typename matrix_t>
-struct normalized_lcc : public cluster_data<matrix_t> {
+struct normalized_lcc : public cluster_data {
     using Device = typename matrix_t::device_type;
     using scalar_t = typename matrix_t::value_type;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
 
     scalar_t g_deg = 0;
 
-    normalized_lcc(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool edge_uniform) : cluster_data<matrix_t>(g, wdeg, 1.0) {
+    normalized_lcc(const matrix_t g, const wgt_vt wdeg, double _penalty_scale, bool edge_uniform) : cluster_data(g, wdeg, 1.0) {
         if(edge_uniform) g_deg = g.nnz();
-        else g_deg = cluster_data<matrix_t>::sum(g.values);
-        uint64_t v_total = cluster_data<matrix_t>::sum(wdeg);
+        else g_deg = cluster_data::sum(g.values);
+        uint64_t v_total = cluster_data::sum(wdeg);
         double denom = static_cast<double>(v_total * v_total);
-        cluster_data<matrix_t>::lambda = _penalty_scale * static_cast<double>(g_deg) / denom;
+        cluster_data::lambda = _penalty_scale * static_cast<double>(g_deg) / denom;
     }
 
     virtual double get_objective() const override {
-        return cluster_data<matrix_t>::obj / static_cast<double>(g_deg);
+        return cluster_data::obj / static_cast<double>(g_deg);
     }
 
     virtual void print(std::ostream& os) const override {

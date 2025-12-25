@@ -8,14 +8,13 @@
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "weighted_graph.h"
+#include "core_types.h"
 
 namespace jet_community {
 
-template<class crsMat>
 class leidenR {
 public:
     // define internal types
-    using matrix_t = crsMat;
     using exec_space = typename matrix_t::execution_space;
     using Device = typename matrix_t::device_type;
     using ordinal_t = typename matrix_t::ordinal_type;
@@ -27,9 +26,9 @@ public:
     using policy_t = typename Kokkos::RangePolicy<exec_space>;
     using team_policy_t = typename Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
-    using mem_t = memory_store<matrix_t>;
-    using refine_data = cluster_data<matrix_t>;
-    using wg_t = weighted_graph<matrix_t>;
+    using mem_t = memory_store;
+    using refine_data = cluster_data;
+    using wg_t = weighted_graph;
     // there is a problem edge-case in kokkos with MaxLoc that can be triggered rarely for any input graph
     // the problem will be fixed soon, use MaxFirstLoc in meantime
     using argmax_reducer_t = Kokkos::MaxFirstLoc<float, edge_offset_t, Device>;

@@ -3,14 +3,13 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "cluster_data.h"
+#include "core_types.h"
 
 // this struct contains almost all auxiliary memory used by the algorithm
 // this allows for efficient reuse of memory
-template <class crsMat>
 struct memory_store {
 
     // define internal types
-    using matrix_t = crsMat;
     using Device = typename matrix_t::device_type;
     using ordinal_t = typename matrix_t::ordinal_type;
     using edge_offset_t = typename matrix_t::size_type;
@@ -78,9 +77,9 @@ struct memory_store {
     persistent p_mem;
     scratch s_mem;
     ordering o_mem;
-    cluster_data<matrix_t> spare_cluster_data;
+    cluster_data spare_cluster_data;
 
-    memory_store(const matrix_t largest, cluster_data<matrix_t>& clone_target) :
+    memory_store(const matrix_t largest, cluster_data& clone_target) :
         p_mem(largest),
         s_mem(largest.numRows()),
         o_mem(largest.numRows()),

@@ -50,12 +50,10 @@
 
 namespace jet_community {
 
-template<class crsMat>
 class local_move_heuristic {
 public:
 
     // define internal types
-    using matrix_t = crsMat;
     using exec_space = typename matrix_t::execution_space;
     using mem_space = typename matrix_t::memory_space;
     using Device = typename matrix_t::device_type;
@@ -74,9 +72,9 @@ public:
     using dyn_policy_t = Kokkos::RangePolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
-    using refine_data = cluster_data<matrix_t>;
-    using mem_t = memory_store<matrix_t>;
-    using wg_t = weighted_graph<matrix_t>;
+    using refine_data = cluster_data;
+    using mem_t = memory_store;
+    using wg_t = weighted_graph;
     static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     static constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
@@ -84,7 +82,7 @@ public:
     static constexpr ordinal_t HASH_RECLAIM = -2;
     static constexpr ordinal_t NO_MOVE = -3;
     static constexpr ordinal_t NEW_PART = -4;
-    static constexpr ordinal_t LARGE_CUTOFF = ordering<matrix_t>::LARGE_CUTOFF;
+    static constexpr ordinal_t LARGE_CUTOFF = ordering::LARGE_CUTOFF;
 
     static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -723,7 +721,6 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
     vtx_vt swap_bit = mem.s_mem.zeros1;
-    ordinal_t total = 0;
     vtx_vt vtx1 = mem.s_mem.vtx1;
     vtx_vt order1 = mem.o_mem.order1;
     vtx_vt order2 = mem.o_mem.order2;
@@ -1250,14 +1247,14 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(wg, part, cdata, mem);
-        // need to store this data
-        // because this is only otherwise stored if the partition improves
-        // which it might not (the partition may be node optimal), even though leidenR can still shrink the graph
-        clone_pval(mem, g.numRows());
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;
     }
+    // need to store this data
+    // because this is only otherwise stored if the partition improves
+    // and it might still be needed if that never happens
+    clone_pval(mem, g.numRows());
     int iter_count = 0;
     std::vector<float> filter_ratios = {0.75, 0.25};
     std::vector<int> limits = {4, 2};
@@ -1304,14 +1301,15 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
         init_conn_graph<uniform>(wg, part, cdata, mem);
-        // need to store this data
-        // because this is only otherwise stored if the partition improves
-        // which it might not (the partition may be node optimal), even though leidenR can still shrink the graph
         clone_pval(mem, g.numRows());
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;
     }
+    // need to store this data
+    // because this is only otherwise stored if the partition improves
+    // and it might still be needed if that never happens
+    clone_pval(mem, g.numRows());
     for(int i = 0; i < 6; i++) {
         vtx_vt moves;
         matrix_t c_graph = cdata.c_graph;

@@ -49,8 +49,8 @@
 using namespace jet_community;
 
 using scalar_t = ordinal_t;
-using rfd_t = cluster_data<matrix_t>;
-using wg_t = weighted_graph<matrix_t>;
+using rfd_t = cluster_data;
+using wg_t = weighted_graph;
 
 template <bool uniform>
 void verify_objective(const wg_t wg, vtx_view_t labels, const base_args args){

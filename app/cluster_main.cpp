@@ -47,14 +47,15 @@
 #include "parse_args.hpp"
 #include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
+#include "core_types.h"
 #include <queue>
 #include <memory>
 
 using namespace jet_community;
-using rfd_t = cluster_data<matrix_t>;
-using wg_t = weighted_graph<matrix_t>;
-using mem_t = memory_store<matrix_t>;
-using cm_t = clustering_methods<matrix_t>;
+using rfd_t = cluster_data;
+using wg_t = weighted_graph;
+using mem_t = memory_store;
+using cm_t = clustering_methods;
 
 // checks how many components graph has after "deleting" cut edges of part_d
 void connected_comps(matrix_t g, vtx_view_t part_d){

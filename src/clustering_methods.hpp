@@ -6,14 +6,13 @@
 #include "leidenR.hpp"
 #include "weighted_graph.h"
 #include "ordering.hpp"
+#include "core_types.h"
 
 namespace jet_community {
 
-template<class crsMat>
 class clustering_methods {
 public:
     // define internal types
-    using matrix_t = crsMat;
     using exec_space = typename matrix_t::execution_space;
     using Device = typename matrix_t::device_type;
     using ordinal_t = typename matrix_t::ordinal_type;
@@ -24,14 +23,14 @@ public:
     using policy_t = typename Kokkos::RangePolicy<exec_space>;
     using team_policy_t = typename Kokkos::TeamPolicy<exec_space>;
     using member = typename team_policy_t::member_type;
-    using mem_t = memory_store<matrix_t>;
-    using refine_data = cluster_data<matrix_t>;
-    using contracter_t = contracter<matrix_t>;
-    using wg_t = weighted_graph<matrix_t>;
-    using rfd_t = cluster_data<matrix_t>;
-    using lr_t = leidenR<matrix_t>;
-    using lm_t = local_move_heuristic<matrix_t>;
-    using order = ordering<matrix_t>;
+    using mem_t = memory_store;
+    using refine_data = cluster_data;
+    using contracter_t = contracter;
+    using wg_t = weighted_graph;
+    using rfd_t = cluster_data;
+    using lr_t = leidenR;
+    using lm_t = local_move_heuristic;
+    using order = ordering;
 
     static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
         Kokkos::parallel_for("set v weights", policy_t(0, in.extent(0)), KOKKOS_LAMBDA(const ordinal_t i){

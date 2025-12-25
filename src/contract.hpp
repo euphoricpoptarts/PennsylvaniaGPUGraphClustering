@@ -43,6 +43,7 @@
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
 #include "weighted_graph.h"
+#include "core_types.h"
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
@@ -67,12 +68,10 @@ KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
   return x;
 }
 
-template<class crsMat> //typename ordinal_t, typename edge_offset_t, typename scalar_t, class Device>
 class contracter {
 public:
 
     // define internal types
-    using matrix_t = crsMat;
     using exec_space = typename matrix_t::execution_space;
     using mem_space = typename matrix_t::memory_space;
     using Device = typename matrix_t::device_type;
@@ -90,18 +89,9 @@ public:
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
-    using wg_t = weighted_graph<matrix_t>;
-    using mem_t = memory_store<matrix_t>;
-    static constexpr ordinal_t get_null_val() {
-        // this value must line up with the null value used by the hashmap
-        // accumulator
-        if (std::is_signed<ordinal_t>::value) {
-            return -1;
-        } else {
-            return std::numeric_limits<ordinal_t>::max();
-        }
-    }
-    static constexpr ordinal_t ORD_MAX  = get_null_val();
+    using wg_t = weighted_graph;
+    using mem_t = memory_store;
+    static constexpr ordinal_t HASH_NULL  = -1;
     static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
 
 template <bool pval_clone_valid>
@@ -171,8 +161,8 @@ struct combineAndDedupe {
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u, const ordinal_t& i) const {
             edge_offset_t offset = xorshiftHash<ordinal_t>(u) % static_cast<uint32_t>(size);
             while(true){
-                if(htable(hash_start + offset) == -1){
-                    if(Kokkos::atomic_compare_exchange(&htable(hash_start + offset), -1, u) == -1){
+                if(htable(hash_start + offset) == HASH_NULL){
+                    if(Kokkos::atomic_compare_exchange(&htable(hash_start + offset), HASH_NULL, u) == HASH_NULL){
                         Kokkos::atomic_add(&counts(i), 1);
                     }
                 }
@@ -275,8 +265,8 @@ wg_t build_coarse_graph(const wg_t curr_level,
     exec_space().fence();
     hash_size = mem.s_mem.edge_scan_host();
     vtx_view_t htable = Kokkos::subview(mem.p_mem.entries, std::make_pair((edge_offset_t)0, hash_size));
-    fast_fill(htable, -1);
-    // Kokkos::deep_copy(exec_space(), htable, -1);
+    fast_fill(htable, HASH_NULL);
+    // Kokkos::deep_copy(exec_space(), htable, HASH_NULL);
     wgt_view_t hvals = Kokkos::subview(mem.p_mem.vals, std::make_pair((edge_offset_t)0, hash_size));
     Kokkos::deep_copy(exec_space(), hvals, 0);
 

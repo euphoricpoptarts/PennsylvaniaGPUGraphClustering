@@ -11,11 +11,11 @@
 #include <memory>
 
 using namespace jet_community;
-using rfd_t = cluster_data<matrix_t>;
-using contracter_t = contracter<matrix_t>;
-using wg_t = weighted_graph<matrix_t>;
-using mem_t = memory_store<matrix_t>;
-using cm_t = clustering_methods<matrix_t>;
+using rfd_t = cluster_data;
+using contracter_t = contracter;
+using wg_t = weighted_graph;
+using mem_t = memory_store;
+using cm_t = clustering_methods;
 
 vtx_view_t intersection_cluster(vtx_view_t c1, vtx_view_t c2, int l2){
 
