@@ -36,7 +36,6 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#pragma once
 #include <type_traits>
 #include <limits>
 #include <iostream>
@@ -50,8 +49,7 @@
 
 namespace jet_community {
 
-class local_move_heuristic {
-public:
+namespace local_move_heuristic {
 
     // define internal types
     using exec_space = typename matrix_t::execution_space;
@@ -75,16 +73,14 @@ public:
     using refine_data = cluster_data;
     using mem_t = memory_store;
     using wg_t = weighted_graph;
-    static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
-    static constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
-    static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
-    static constexpr ordinal_t NULL_PART = -1;
-    static constexpr ordinal_t HASH_RECLAIM = -2;
-    static constexpr ordinal_t NO_MOVE = -3;
-    static constexpr ordinal_t NEW_PART = -4;
-    static constexpr ordinal_t LARGE_CUTOFF = ordering::LARGE_CUTOFF;
+    constexpr float OBJ_MIN = std::numeric_limits<float>::lowest();
+    constexpr ordinal_t NULL_PART = -1;
+    constexpr ordinal_t HASH_RECLAIM = -2;
+    constexpr ordinal_t NO_MOVE = -3;
+    constexpr ordinal_t NEW_PART = -4;
+    constexpr ordinal_t LARGE_CUTOFF = ordering::LARGE_CUTOFF;
 
-    static KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
+    KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;
@@ -1349,6 +1345,17 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     }
     relabel_contiguously(best_part, best_state, mem);
 }
-};
+
+    template void local_move<true, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<true, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<false, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<false, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+
+    template void local_move_strict<true, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<true, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<false, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<false, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+
+}
 
 }

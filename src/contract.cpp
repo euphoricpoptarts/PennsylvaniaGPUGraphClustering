@@ -36,11 +36,8 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#pragma once
-#include <list>
 #include <limits>
 #include <Kokkos_Core.hpp>
-#include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
 #include "weighted_graph.h"
 #include "core_types.h"
@@ -50,26 +47,11 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 
-struct is_nonnegative {
-    __host__ __device__
-    bool operator()(const int x){
-        return x >= 0;
-    }
-};
+
 
 namespace jet_community {
 
-template<typename ordinal_t>
-KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
-  ordinal_t x = key;
-  x ^= x << 13;
-  x ^= x >> 17;
-  x ^= x << 5;
-  return x;
-}
-
-class contracter {
-public:
+namespace contracter {
 
     // define internal types
     using exec_space = typename matrix_t::execution_space;
@@ -91,8 +73,23 @@ public:
     using member = typename team_policy_t::member_type;
     using wg_t = weighted_graph;
     using mem_t = memory_store;
-    static constexpr ordinal_t HASH_NULL  = -1;
-    static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
+    constexpr ordinal_t HASH_NULL  = -1;
+    constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
+
+struct is_nonnegative {
+    __host__ __device__
+    bool operator()(const int x){
+        return x >= 0;
+    }
+};
+
+KOKKOS_INLINE_FUNCTION ordinal_t xorshiftHash(ordinal_t key) {
+  ordinal_t x = key;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  return x;
+}
 
 template <bool pval_clone_valid>
 struct countingFunctor {
@@ -159,7 +156,7 @@ struct combineAndDedupe {
     // uses linear probing to resolve hash conflicts
     KOKKOS_INLINE_FUNCTION
         edge_offset_t insert(const edge_offset_t& hash_start, const edge_offset_t& size, const ordinal_t& u, const ordinal_t& i) const {
-            edge_offset_t offset = xorshiftHash<ordinal_t>(u) % static_cast<uint32_t>(size);
+            edge_offset_t offset = xorshiftHash(u) % static_cast<uint32_t>(size);
             while(true){
                 if(htable(hash_start + offset) == HASH_NULL){
                     if(Kokkos::atomic_compare_exchange(&htable(hash_start + offset), HASH_NULL, u) == HASH_NULL){
@@ -321,6 +318,26 @@ wg_t build_coarse_graph(const wg_t curr_level,
     return next_level;
 }
 
-};
+    template wg_t build_coarse_graph<true, true>(const wg_t curr_level,
+        const vtx_view_t vcmap,
+        const ordinal_t nc,
+        mem_t& mem);
+
+    template wg_t build_coarse_graph<true, false>(const wg_t curr_level,
+        const vtx_view_t vcmap,
+        const ordinal_t nc,
+        mem_t& mem);
+
+    template wg_t build_coarse_graph<false, true>(const wg_t curr_level,
+        const vtx_view_t vcmap,
+        const ordinal_t nc,
+        mem_t& mem);
+
+    template wg_t build_coarse_graph<false, false>(const wg_t curr_level,
+        const vtx_view_t vcmap,
+        const ordinal_t nc,
+        mem_t& mem);
+
+}
 
 }

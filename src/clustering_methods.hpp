@@ -1,14 +1,18 @@
-#include "local_mover.hpp"
-#include "contract.hpp"
+#include "local_mover.h"
+#include "contract.h"
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
-#include "leidenR.hpp"
+#include "leidenR.h"
 #include "weighted_graph.h"
 #include "ordering.hpp"
 #include "core_types.h"
 
 namespace jet_community {
+
+namespace contract_t = contracter;
+namespace lr_t = leidenR;
+namespace lm_t = local_move_heuristic;
 
 class clustering_methods {
 public:
@@ -25,11 +29,8 @@ public:
     using member = typename team_policy_t::member_type;
     using mem_t = memory_store;
     using refine_data = cluster_data;
-    using contracter_t = contracter;
     using wg_t = weighted_graph;
     using rfd_t = cluster_data;
-    using lr_t = leidenR;
-    using lm_t = local_move_heuristic;
     using order = ordering;
 
     static void coarsen_vtx_w(wgt_view_t in, wgt_view_t out, vtx_view_t map){
@@ -52,7 +53,6 @@ public:
         std::vector<vtx_vt> parts;
         levels.push_back(top);
         double aggregate = 0;
-        lm_t local_mover;
         vtx_vt part("cluster assignments", top.mtx.numRows());
         if(!improve){
             Kokkos::parallel_for("set initial assignments", r_policy(0, top.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
@@ -65,11 +65,11 @@ public:
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, !improve, mem, part);
-            else local_mover.template local_move<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+            if(c.edge_uniform) lm_t::local_move<true, false>(c, part, rfd, !improve, mem, part);
+            else lm_t::local_move<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             if(old_obj == rfd.obj){
-                if(c.edge_uniform) local_mover.template local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
-                else local_mover.template local_move_strict<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+                if(c.edge_uniform) lm_t::local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
+                else lm_t::local_move_strict<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
@@ -84,10 +84,9 @@ public:
             parts.push_back(coarse_map);
             if(coarse_vtx_count < c.mtx.numRows()){
                 Kokkos::Timer t;
-                contracter_t contracter;
                 wg_t next_level;
-                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
-                else next_level = contracter.template build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
+                if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
+                else next_level = contract_t::build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
                 next_level.vtx_w = wgt_view_t("weighted degree 2", coarse_vtx_count);
                 coarsen_vtx_w(c.vtx_w, next_level.vtx_w, coarse_map);
 
@@ -123,8 +122,8 @@ public:
             });
     #ifdef LEIDEN_PLUS
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) local_mover.template local_move<true, false>(c, fine_part, rfd, false, mem, part);
-            else local_mover.template local_move<false, false>(c, fine_part, rfd, false, mem, part);
+            if(c.edge_uniform) lm_t::local_move<true, false>(c, fine_part, rfd, false, mem, part);
+            else lm_t::local_move<false, false>(c, fine_part, rfd, false, mem, part);
     #endif
         }
         return parts[0];
@@ -137,7 +136,6 @@ public:
         std::vector<vtx_vt> parts;
         levels.push_back(top);
         double aggregate = 0;
-        lm_t local_mover;
         bool drop_constraint = constrained;
         while(true) {
             wg_t c = levels[levels.size() - 1];
@@ -148,20 +146,19 @@ public:
             });
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) local_mover.template local_move<true, constrained>(c, part, rfd, true, mem, constraint);
-            else local_mover.template local_move<false, constrained>(c, part, rfd, true, mem, constraint);
+            if(c.edge_uniform) lm_t::local_move<true, constrained>(c, part, rfd, true, mem, constraint);
+            else lm_t::local_move<false, constrained>(c, part, rfd, true, mem, constraint);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
-                if(c.edge_uniform) local_mover.template local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
-                else local_mover.template local_move_strict<false, constrained>(c, part, rfd, true, mem, constraint);
+                if(c.edge_uniform) lm_t::local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
+                else lm_t::local_move_strict<false, constrained>(c, part, rfd, true, mem, constraint);
             }
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
                 Kokkos::Timer t;
-                contracter_t contracter;
                 wg_t next_level;
-                if(c.edge_uniform) next_level = contracter.template build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
-                else next_level = contracter.template build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
+                if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
+                else next_level = contract_t::build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
                 wgt_view_t td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
                 next_level.vtx_w = wgt_view_t("next level vtx weights", rfd.label_count);
                 Kokkos::deep_copy(next_level.vtx_w, td_rfd);
@@ -208,8 +205,8 @@ public:
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) local_mover.template local_move<true, false>(c, part, rfd, false, mem, constraint);
-            else local_mover.template local_move<false, false>(c, part, rfd, false, mem, constraint);
+            if(c.edge_uniform) lm_t::local_move<true, false>(c, part, rfd, false, mem, constraint);
+            else lm_t::local_move<false, false>(c, part, rfd, false, mem, constraint);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);

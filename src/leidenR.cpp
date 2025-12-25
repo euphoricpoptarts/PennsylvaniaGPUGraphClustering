@@ -1,4 +1,3 @@
-#pragma once
 #include <limits>
 #include <random>
 #include <Kokkos_Core.hpp>
@@ -12,8 +11,7 @@
 
 namespace jet_community {
 
-class leidenR {
-public:
+namespace leidenR {
     // define internal types
     using exec_space = typename matrix_t::execution_space;
     using Device = typename matrix_t::device_type;
@@ -34,12 +32,11 @@ public:
     using argmax_reducer_t = Kokkos::MaxFirstLoc<float, edge_offset_t, Device>;
     using argmax_t = typename argmax_reducer_t::value_type;
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
-    static constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
-    static constexpr bool is_host_space = std::is_same<typename exec_space::memory_space, typename Kokkos::DefaultHostExecutionSpace::memory_space>::value;
-    static constexpr ordinal_t split = 1000000000;
+    constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
+    constexpr ordinal_t split = 1000000000;
 
     template <bool uniform>
-    static void ensure_gamma_connectivity(const wg_t wg, vtx_vt vcmap, vtx_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
+    void ensure_gamma_connectivity(const wg_t wg, vtx_vt vcmap, vtx_vt constraint, vtx_vt order, const wgt_vt total_deg, mem_t& mem, const refine_data& rfd) {
 
         const matrix_t g = wg.mtx;
         const wgt_vt vtx_w = wg.vtx_w;
@@ -173,7 +170,7 @@ public:
     }
 
     // reassigns cluster labels into a contiguous range beginning from 0
-    static ordinal_t contigitize_clusters(vtx_vt vcmap, const ordinal_t n) {
+    ordinal_t contigitize_clusters(vtx_vt vcmap, const ordinal_t n) {
         ordinal_t nc = 0;
         Kokkos::parallel_scan("assign contiguous id", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t u, ordinal_t& update, const bool final){
             // every cluster with label "u" must contain vertex "u"
@@ -196,7 +193,7 @@ public:
     }
 
     //hn is a list of vertices such that vertex i wants to aggregate with vertex hn(i)
-    static void find_trees(vtx_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
+    void find_trees(vtx_vt vcmap, const ordinal_t n, const vtx_vt hn, vtx_vt order) {
 
         // compute connected components on the forest induced by hn
         // in this kernel we ignore edges that go towards a higher ordinal vertex
@@ -247,11 +244,11 @@ public:
 
     // uniform is true only if top is true
     template <bool top, bool uniform>
-    static vtx_vt coarsen_leidenR(const wg_t wg,
+    vtx_vt coarsen_leidenR(const wg_t wg,
         const vtx_vt& constraint,
         mem_t& mem,
         const refine_data& rfd,
-        int& coarse_vtx_count) {
+        ordinal_t& coarse_vtx_count) {
 
         matrix_t g = wg.mtx;
         wgt_vt vtx_w = wg.vtx_w;
@@ -425,7 +422,24 @@ public:
         return vcmap;
     }
 
+    template vtx_vt coarsen_leidenR<true, true>(const wg_t wg,
+        const vtx_vt& constraint,
+        mem_t& mem,
+        const refine_data& rfd,
+        ordinal_t& coarse_vtx_count);
+
+    template vtx_vt coarsen_leidenR<true, false>(const wg_t wg,
+        const vtx_vt& constraint,
+        mem_t& mem,
+        const refine_data& rfd,
+        ordinal_t& coarse_vtx_count);
+
+    template vtx_vt coarsen_leidenR<false, false>(const wg_t wg,
+        const vtx_vt& constraint,
+        mem_t& mem,
+        const refine_data& rfd,
+        ordinal_t& coarse_vtx_count);
     
-};
+}
 
 }
