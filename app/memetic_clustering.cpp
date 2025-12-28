@@ -5,17 +5,17 @@
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
-#include "clustering_methods.hpp"
+#include "clustering_methods.h"
 #include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include <memory>
+#include <random>
 
 using namespace jet_community;
 using rfd_t = cluster_data;
-using contracter_t = contracter;
 using wg_t = weighted_graph;
 using mem_t = memory_store;
-using cm_t = clustering_methods;
+namespace cm_t = clustering_methods;
 
 vtx_view_t intersection_cluster(vtx_view_t c1, vtx_view_t c2, int l2){
 
@@ -120,7 +120,7 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
     int time_limit = args.time_limit;
     for(int i = 0; i < pop_size; i++){
         vtx_view_t dummy_constraint;
-        vtx_view_t c = cm_t::leiden_part<false>(mem, wg, rfd, dummy, dummy_constraint);
+        vtx_view_t c = cm_t::leiden_part<true, false>(mem, wg, rfd, dummy, dummy_constraint);
         clustering y;
         y.clusters = c;
         y.obj = rfd.get_objective();
@@ -159,7 +159,7 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
         vtx_view_t c3 = cm_t::louvain_part<true>(mem, wg, rfd, dummy, constraint);
         std::cout << "Parent 1 obj: " << c1.obj << "; Parent 2 obj: " << c2.obj << "; Offspring obj: " << rfd.get_objective();
         for(int x = 0; x < 5; x++){
-            c3 = cm_t::leiden_part<true>(mem, wg, rfd, dummy, c3);
+            c3 = cm_t::leiden_part<true, true>(mem, wg, rfd, dummy, c3);
         }
         std::cout << "; Post leiden obj: " << rfd.get_objective();
         if(rfd.get_objective() > best){

@@ -42,7 +42,7 @@
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
-#include "clustering_methods.hpp"
+#include "clustering_methods.h"
 #include "weighted_graph.h"
 #include "parse_args.hpp"
 #include "vertex_weighting.hpp"
@@ -55,7 +55,7 @@ using namespace jet_community;
 using rfd_t = cluster_data;
 using wg_t = weighted_graph;
 using mem_t = memory_store;
-using cm_t = clustering_methods;
+namespace cm_t = clustering_methods;
 
 // checks how many components graph has after "deleting" cut edges of part_d
 void connected_comps(matrix_t g, vtx_view_t part_d){
@@ -117,7 +117,11 @@ vtx_view_t run_clustering(const wg_t wg,
     std::cout << std::setprecision(6);
     vtx_view_t constraint;
 #ifdef LEIDEN
-    vtx_view_t part = cm_t::leiden_part<false>(mem, wg, *rfd, experiment, constraint);
+#ifdef LEIDEN_PLUS
+    vtx_view_t part = cm_t::leiden_part<true, false>(mem, wg, *rfd, experiment, constraint);
+#else
+    vtx_view_t part = cm_t::leiden_part<false, false>(mem, wg, *rfd, experiment, constraint);
+#endif
 #else
     vtx_view_t part = cm_t::louvain_part<false>(mem, wg, *rfd, experiment, constraint);
 #endif
@@ -132,7 +136,11 @@ vtx_view_t run_clustering(const wg_t wg,
     while(!iteration_termination_condition(args, rfd, last_obj, counter)){
         constraint = part;
 #ifdef LEIDEN
-        part = cm_t::leiden_part<true>(mem, wg, *rfd, experiment, constraint);
+#ifdef LEIDEN_PLUS
+        part = cm_t::leiden_part<true, true>(mem, wg, *rfd, experiment, constraint);
+#else
+        part = cm_t::leiden_part<false, true>(mem, wg, *rfd, experiment, constraint);
+#endif
 #else
         part = cm_t::louvain_part<true>(mem, wg, *rfd, experiment, constraint);
 #endif

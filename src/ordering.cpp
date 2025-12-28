@@ -1,24 +1,12 @@
-#pragma once
-#include <Kokkos_Core.hpp>
-#include "KokkosSparse_CrsMatrix.hpp"
-#include "memory_store.hpp"
-#include "core_types.h"
+#include "ordering.h"
 
 namespace jet_community {
 
-class ordering {
-public:
-
+namespace ordering {
     // define internal types
     using exec_space = typename matrix_t::execution_space;
-    using Device = typename matrix_t::device_type;
-    using ordinal_t = typename matrix_t::ordinal_type;
     using vtx_vt = Kokkos::View<ordinal_t*, exec_space>;
     using policy_t = Kokkos::RangePolicy<exec_space>;
-    using mem_t = memory_store;
-    static constexpr ordinal_t MID_CUTOFF = 32;
-    static constexpr ordinal_t LARGE_CUTOFF = 128;
-    static constexpr ordinal_t MASSIVE_CUTOFF = 15000;
 
 // all this stuff is adapted from the kokkos wiki
 struct wrapper {
@@ -138,7 +126,7 @@ struct ScanMyArray {
 
 // buckets vertices by degree, whilst maintaining natural order within each bucket
 // generates two such orderings, only differing in the cutoff separating the first and second buckets
-static void generate_orderings(mem_t& mem, const matrix_t& g) {
+void generate_orderings(mem_t& mem, const matrix_t& g) {
     ordinal_t n = g.numRows();
     vtx_vt order1 = mem.o_mem.order1;
     vtx_vt order2 = mem.o_mem.order2;
@@ -173,6 +161,6 @@ static void generate_orderings(mem_t& mem, const matrix_t& g) {
     Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(g, order1, order2, offsets));
 }
 
-};
+}
 
 }

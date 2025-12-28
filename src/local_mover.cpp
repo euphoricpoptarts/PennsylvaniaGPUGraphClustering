@@ -36,16 +36,13 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#include <type_traits>
 #include <limits>
-#include <iostream>
-#include <iomanip>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "weighted_graph.h"
-#include "ordering.hpp"
+#include "ordering.h"
 
 namespace jet_community {
 
@@ -59,16 +56,12 @@ namespace local_move_heuristic {
     using edge_offset_t = typename matrix_t::size_type;
     using scalar_t = typename matrix_t::value_type;
     using vtx_vt = Kokkos::View<ordinal_t*, exec_space>;
-    using vtx_svt = Kokkos::View<ordinal_t, Device>;
     using wgt_vt = Kokkos::View<scalar_t*, Device>;
     using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
     using vtx_pin_st = Kokkos::View<ordinal_t, Kokkos::SharedHostPinnedSpace>;
     using obj_vt = Kokkos::View<float*, Device>;
-    using edge_subview_t = Kokkos::View<edge_offset_t, Device>;
     using policy_t = Kokkos::RangePolicy<exec_space>;
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
-    using dyn_policy_t = Kokkos::RangePolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
-    using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using member = typename team_policy_t::member_type;
     using refine_data = cluster_data;
     using mem_t = memory_store;
@@ -1346,6 +1339,7 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     relabel_contiguously(best_part, best_state, mem);
 }
 
+    // explicit template instantiations
     template void local_move<true, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
     template void local_move<true, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
     template void local_move<false, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);

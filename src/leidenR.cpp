@@ -270,9 +270,7 @@ namespace leidenR {
         });
 
         std::random_device rd;
-        if(top){
-            // randomizations is only strictly necessary on top level graph
-            // randomization on successive levels is empirically detrimental to objective quality
+        if(uniform){
             ordinal_t seed = rd();
             Kokkos::parallel_for("select random edge", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i) {
                 edge_offset_t end = g.graph.row_map(i + 1);
@@ -422,6 +420,8 @@ namespace leidenR {
         return vcmap;
     }
 
+    // explicit template instantiations
+    // <false, true> is never invoked
     template vtx_vt coarsen_leidenR<true, true>(const wg_t wg,
         const vtx_vt& constraint,
         mem_t& mem,

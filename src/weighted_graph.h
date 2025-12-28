@@ -1,6 +1,5 @@
 #pragma once
 #include <Kokkos_Core.hpp>
-#include "KokkosSparse_CrsMatrix.hpp"
 #include "core_types.h"
 
 namespace jet_community {

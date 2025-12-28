@@ -318,6 +318,7 @@ wg_t build_coarse_graph(const wg_t curr_level,
     return next_level;
 }
 
+    // explicit template instantiations
     template wg_t build_coarse_graph<true, true>(const wg_t curr_level,
         const vtx_view_t vcmap,
         const ordinal_t nc,
