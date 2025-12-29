@@ -1,11 +1,11 @@
-#include "local_mover.h"
-#include "contract.h"
+#include "header/local_mover.h"
+#include "header/contract.h"
+#include "header/leidenR.h"
+#include "header/ordering.h"
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "ExperimentLoggerUtil.hpp"
-#include "leidenR.h"
 #include "weighted_graph.h"
-#include "ordering.h"
 #include "core_types.h"
 
 namespace jet_community {

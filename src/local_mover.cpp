@@ -42,7 +42,7 @@
 #include "memory_store.hpp"
 #include "cluster_data.h"
 #include "weighted_graph.h"
-#include "ordering.h"
+#include "header/ordering.h"
 
 namespace jet_community {
 
