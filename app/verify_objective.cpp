@@ -37,9 +37,9 @@
 //
 // ************************************************************************
 #include "defs.h"
-#include "io_mtx.hpp"
+#include "io/header/io.h"
+#include "io/header/parse_args.h"
 #include "weighted_graph.h"
-#include "parse_args.hpp"
 #include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include "cluster_data.hpp"

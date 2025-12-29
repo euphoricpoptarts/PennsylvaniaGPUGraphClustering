@@ -36,26 +36,22 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#pragma once
-#include "defs.h"
+#include "core_types.h"
 #include <filesystem>
-#include <sstream>
 #include <string>
 #include <iostream>
 #include <fstream>
+#include "header/io_common.hpp"
 
 namespace jet_community {
 
-template<typename t>
-t fast_atoi( const char*& str )
-{
-    t val = 0;
-    while(isdigit(*str)) {
-        val = val*10 + static_cast<t>(*str - '0');
-        str++;
-    }
-    return val;
-}
+using graph_t = typename matrix_t::staticcrsgraph_type;
+using edge_view_t = Kokkos::View<edge_offset_t*, Device>;
+using edge_mirror_t = typename edge_view_t::HostMirror;
+using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
+using vtx_mirror_t = typename vtx_view_t::HostMirror;
+using wgt_view_t = Kokkos::View<value_t*, Device>;
+using wgt_mirror_t = typename wgt_view_t::HostMirror;
 
 void next_line(const char*& str){
     while(*str != '\n') str++;
@@ -179,37 +175,6 @@ bool load_metis_graph(matrix_t& g, bool& uniform_ew, const char *fname) {
     g = matrix_t("input graph", n, values, g_graph);
     std::cout << "Read graph from " << fname << " in " << std::setprecision(3) << t.seconds() << "s" << std::endl;
     return true;
-}
-
-void write_part(vtx_view_t part_d, const char *fname){
-    std::ofstream ofp(fname);
-    if(!ofp.is_open()) return;
-    vtx_mirror_t part = Kokkos::create_mirror_view(part_d);
-    Kokkos::deep_copy(part, part_d);
-    size_t n = part.extent(0);
-    std::stringstream ss;
-    for(size_t x = 0; x < n; x++){
-        ss << part(x) << std::endl;
-    }
-    ofp << ss.str();
-    ofp.close();
-}
-
-template <class view_t>
-view_t load_view(ordinal_t n, const char *fname){
-    std::ifstream ifp(fname);
-    view_t v_d("device view", n);
-    if(!ifp.is_open()){
-        std::cerr << "FATAL ERROR: Could not open " << fname << std::endl;
-        return v_d;
-    }
-    typename view_t::HostMirror v = Kokkos::create_mirror_view(v_d);
-    for(ordinal_t x = 0; x < n; x++){
-        ifp >> v(x);
-    }
-    ifp.close();
-    Kokkos::deep_copy(v_d, v);
-    return v_d;
 }
 
 }

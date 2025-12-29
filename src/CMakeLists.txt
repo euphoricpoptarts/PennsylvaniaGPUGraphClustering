@@ -1,4 +1,4 @@
-add_library(cluster)
+add_library(cluster STATIC)
 target_sources(cluster PRIVATE
     leidenR.cpp
     contract.cpp

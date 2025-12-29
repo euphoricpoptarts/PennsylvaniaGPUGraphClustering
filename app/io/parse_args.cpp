@@ -1,10 +1,9 @@
-#pragma once
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
 #include <vector>
-
-enum class Objective { Modularity, CPM, WModularity, NLCC, Base};
+#include <iostream>
+#include "header/parse_args.h"
 
 static std::unordered_map<std::string, Objective> obj_map = {
     {"Mod", Objective::Modularity},
@@ -12,30 +11,6 @@ static std::unordered_map<std::string, Objective> obj_map = {
     {"CPM", Objective::CPM},
     {"NLCC", Objective::NLCC},
     {"LCC", Objective::Base}
-};
-
-struct base_args {
-    std::string graph_file;
-    std::string output_file;
-    std::string vw_file;
-    double lambda_multiplier = 1.0;
-    Objective obj_type = Objective::Modularity;
-    bool valid;
-};
-
-struct verify_args : base_args {
-    std::string cluster_file;
-};
-
-struct cluster_args : base_args {
-    int n_trials = 1;
-    int n_successive_iterations = 0;
-    std::string metrics_file;
-};
-
-struct meme_args : base_args {
-    int pop_size = 10;
-    int time_limit = 10;
 };
 
 void print_configuration_base(base_args args){

@@ -1,6 +1,7 @@
 #include "defs.h"
-#include "io.hpp"
-#include "io_mtx.hpp"
+#include "io/header/io.h"
+#include "io/header/parse_args.h"
+#include "io/header/io_views.hpp"
 #include "weighted_graph.h"
 #include "memory_store.hpp"
 #include "cluster_data.hpp"
@@ -233,7 +234,7 @@ int main(int argc, char **argv) {
         vtx_view_t best_clusters = meme_cluster(wg, args);
         if(args.output_file.size() > 0){
             std::cout << "Writing best clustering to " << args.output_file << std::endl;
-            write_part(best_clusters, args.output_file.c_str());
+            write_part<vtx_view_t>(best_clusters, args.output_file.c_str());
         }
     }
     Kokkos::finalize();

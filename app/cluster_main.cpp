@@ -37,14 +37,14 @@
 //
 // ************************************************************************
 #include "defs.h"
-#include "io.hpp"
-#include "io_mtx.hpp"
+#include "io/header/io.h"
+#include "io/header/parse_args.h"
+#include "io/header/io_views.hpp"
 #include "memory_store.hpp"
 #include "cluster_data.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.h"
 #include "weighted_graph.h"
-#include "parse_args.hpp"
 #include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include "core_types.h"
@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
         std::cout << std::setprecision(9) << "Best objective found: " << best_mod << std::endl;
         if(args.output_file.size() > 0){
             std::cout << "Writing best clustering to " << args.output_file << std::endl;
-            write_part(best_clusters, args.output_file.c_str());
+            write_part<vtx_view_t>(best_clusters, args.output_file.c_str());
         }
     }
     Kokkos::finalize();
