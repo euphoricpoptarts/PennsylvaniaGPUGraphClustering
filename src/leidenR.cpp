@@ -5,7 +5,7 @@
 #include "KokkosSparse_SortCrs.hpp"
 #include "Kokkos_UnorderedMap.hpp"
 #include "memory_store.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "weighted_graph.h"
 #include "core_types.h"
 

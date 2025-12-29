@@ -1,7 +1,7 @@
 #pragma once
 #include <Kokkos_Core.hpp>
 #include "memory_store.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "weighted_graph.h"
 
 namespace jet_community {

@@ -3,7 +3,7 @@
 #include "header/leidenR.h"
 #include "header/ordering.h"
 #include "memory_store.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "weighted_graph.h"
 #include "core_types.h"

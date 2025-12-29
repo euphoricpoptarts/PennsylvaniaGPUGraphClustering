@@ -42,7 +42,7 @@
 #include "parse_args.hpp"
 #include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include <limits>
 #include <memory>
 

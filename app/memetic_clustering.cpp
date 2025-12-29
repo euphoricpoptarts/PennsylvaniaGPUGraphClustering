@@ -3,7 +3,7 @@
 #include "io_mtx.hpp"
 #include "weighted_graph.h"
 #include "memory_store.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.h"
 #include "vertex_weighting.hpp"

@@ -2,7 +2,7 @@
 #include <type_traits>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "core_types.h"
 
 // this struct contains almost all auxiliary memory used by the algorithm

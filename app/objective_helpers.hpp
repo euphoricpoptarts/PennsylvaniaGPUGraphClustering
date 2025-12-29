@@ -1,6 +1,6 @@
 #include "parse_args.hpp"
 #include "weighted_graph.h"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 
 namespace jet_community {
     

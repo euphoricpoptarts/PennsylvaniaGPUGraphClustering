@@ -40,7 +40,7 @@
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "memory_store.hpp"
-#include "cluster_data.h"
+#include "cluster_data.hpp"
 #include "weighted_graph.h"
 #include "header/ordering.h"
 
