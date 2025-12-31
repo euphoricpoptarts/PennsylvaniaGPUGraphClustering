@@ -60,11 +60,9 @@ namespace clustering_methods {
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) lm_t::local_move<true, false>(c, part, rfd, !improve, mem, part);
-            else lm_t::local_move<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+            lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             if(old_obj == rfd.obj){
-                if(c.edge_uniform) lm_t::local_move_strict<true, false>(c, part, rfd, !improve, mem, part);
-                else lm_t::local_move_strict<false, false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+                lm_t::local_move_strict<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
@@ -117,8 +115,7 @@ namespace clustering_methods {
             });
             if constexpr(plus){
                 order::generate_orderings(mem, c.mtx);
-                if(c.edge_uniform) lm_t::local_move<true, false>(c, fine_part, rfd, false, mem, part);
-                else lm_t::local_move<false, false>(c, fine_part, rfd, false, mem, part);
+                lm_t::local_move<false>(c, fine_part, rfd, false, mem, part);
             }
         }
         return parts[0];
@@ -141,12 +138,10 @@ namespace clustering_methods {
             });
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) lm_t::local_move<true, constrained>(c, part, rfd, true, mem, constraint);
-            else lm_t::local_move<false, constrained>(c, part, rfd, true, mem, constraint);
+            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
-                if(c.edge_uniform) lm_t::local_move_strict<true, constrained>(c, part, rfd, true, mem, constraint);
-                else lm_t::local_move_strict<false, constrained>(c, part, rfd, true, mem, constraint);
+                lm_t::local_move_strict<constrained>(c, part, rfd, true, mem, constraint);
             }
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
@@ -200,8 +195,7 @@ namespace clustering_methods {
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            if(c.edge_uniform) lm_t::local_move<true, false>(c, part, rfd, false, mem, constraint);
-            else lm_t::local_move<false, false>(c, part, rfd, false, mem, constraint);
+            lm_t::local_move<false>(c, part, rfd, false, mem, constraint);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);

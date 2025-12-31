@@ -16,10 +16,10 @@ namespace local_move_heuristic {
     using mem_t = memory_store;
     using wg_t = weighted_graph;
 
-    template <bool uniform, bool constrained>
+    template <bool constrained>
     void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
 
-    template <bool uniform, bool constrained>
+    template <bool constrained>
     void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
 
 }

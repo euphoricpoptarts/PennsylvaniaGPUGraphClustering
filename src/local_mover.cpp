@@ -1225,7 +1225,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
     Kokkos::deep_copy(exec_space(), pval_clone_subview, pval_subview);
 }
 
-template <bool uniform, bool constrained>
+template <bool constrained>
 void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
@@ -1235,7 +1235,8 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(wg, part, cdata, mem);
+        if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
+        else init_conn_graph<false>(wg, part, cdata, mem);
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;
@@ -1259,12 +1260,14 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
-            if(uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+            if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
             else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
             if(moves.extent(0) == 0) break;
-            moves = afterburner_filter<uniform>(moves, wg, part, curr_state, mem);
+            if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
+            else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
-            perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
+            if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state);
+            else perform_moves<false>(wg, part, moves, cdata, mem, curr_state);
             //copy current partition and relevant data to output partition if following conditions pass
             if(curr_state.obj > best_state.obj){
                 best_state.copy(curr_state);
@@ -1279,7 +1282,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
 // if a non-node optimal vertex exists, this function (almost) guarantees an improvement to the objective function
 // with some exceptions due to floating-point roundoff
 // this occurs specifically if a vertex is close to node-optimal, having a near-zero objective delta to a neighboring cluster 
-template <bool uniform, bool constrained>
+template <bool constrained>
 void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
@@ -1289,7 +1292,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     if(!is_initial){
-        init_conn_graph<uniform>(wg, part, cdata, mem);
+        if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
+        else init_conn_graph<false>(wg, part, cdata, mem);
         clone_pval(mem, g.numRows());
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
@@ -1306,7 +1310,7 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        if(uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
+        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
         else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
 
         // move list needs to be in vtx2 or else bad things happen
@@ -1318,9 +1322,11 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
         if(moves.extent(0) == 0) break;
         if(i > 0 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
         double expected_diff = 0;
-        moves = afterburner_filter_strict<uniform>(wg, moves, part, curr_state, mem, expected_diff);
+        if(wg.edge_uniform) moves = afterburner_filter_strict<true>(wg, moves, part, curr_state, mem, expected_diff);
+        else moves = afterburner_filter_strict<false>(wg, moves, part, curr_state, mem, expected_diff);
         if(moves.extent(0) == 0) break;
-        perform_moves<uniform>(wg, part, moves, cdata, mem, curr_state);
+        if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state);
+        else perform_moves<false>(wg, part, moves, cdata, mem, curr_state);
         //copy current partition and relevant data to output partition if following conditions pass
         if(curr_state.obj > best_state.obj){
             best_state.copy(curr_state);
@@ -1340,15 +1346,11 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
 }
 
     // explicit template instantiations
-    template void local_move<true, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move<true, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move<false, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move<false, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
 
-    template void local_move_strict<true, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move_strict<true, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move_strict<false, true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move_strict<false, false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
 
 }
 
