@@ -37,6 +37,7 @@
 //
 // ************************************************************************
 #include <limits>
+#include <type_traits>
 #include <Kokkos_Core.hpp>
 #include "memory_store.hpp"
 #include "weighted_graph.h"
@@ -66,7 +67,6 @@ namespace contracter {
     using edge_subview_t = Kokkos::View<edge_offset_t, Device>;
     using graph_type = typename matrix_t::staticcrsgraph_type;
     using policy_t = Kokkos::RangePolicy<exec_space>;
-    using big_policy_t = Kokkos::RangePolicy<exec_space, Kokkos::IndexType<edge_offset_t>>;
     using dyn_policy_t = Kokkos::RangePolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
     using team_policy_t = Kokkos::TeamPolicy<exec_space>;
     using dyn_team_policy_t = Kokkos::TeamPolicy<Kokkos::Schedule<Kokkos::Dynamic>, exec_space>;
@@ -294,21 +294,33 @@ wg_t build_coarse_graph(const wg_t curr_level,
     exec_space().fence();
     hash_size = mem.s_mem.edge_scan_host();
 
-    // stream compaction
+    // segmented stream compaction
+    // segments have size equal to max representable number of ordinal_t
+    // this allows storing offsets directly into entries_coarse, even if edge_offset_t is a larger type
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
     Kokkos::fence();
-    thrust::device_ptr<ordinal_t> htb(htable.data());
-    thrust::counting_iterator<edge_offset_t> iter(0);
-    // scalar_t and edge_offset_t are the same type in the current code
-    // and they should usually be the same type
-    thrust::device_ptr<edge_offset_t> wc(wgts_coarse.data());
-    thrust::copy_if(thrust::device, iter, iter + old_size, htb, wc, is_nonnegative());
-    Kokkos::parallel_for("read", big_policy_t(0, hash_size), KOKKOS_LAMBDA(const edge_offset_t j){
-        edge_offset_t jx = wgts_coarse(j);
-        entries_coarse(j) = htable(jx);
-        wgts_coarse(j) = hvals(jx);
-    });
+    edge_offset_t stream_compact_start = 0;
+    edge_offset_t coarse_start = 0;
+    while(stream_compact_start < old_size) {
+        ordinal_t* htb = htable.data() + stream_compact_start;
+        ordinal_t width = std::numeric_limits<ordinal_t>::max();
+        if(stream_compact_start + width >= old_size) width = old_size - stream_compact_start;
+        thrust::counting_iterator<ordinal_t> iter(0);
+        ordinal_t* ec = entries_coarse.data() + coarse_start;
+        ordinal_t* ec_end;
+        if(!is_host_space) ec_end = thrust::copy_if(thrust::device, iter, iter + width, htb, ec, is_nonnegative());
+        else ec_end = thrust::copy_if(thrust::host, iter, iter + width, htb, ec, is_nonnegative());
+        ordinal_t compacted_width = ec_end - ec;
+        Kokkos::parallel_for("read", policy_t(0, compacted_width), KOKKOS_LAMBDA(const ordinal_t dst_base){
+            edge_offset_t dst_offset = coarse_start + dst_base;
+            edge_offset_t src_offset = entries_coarse(dst_offset) + stream_compact_start;
+            entries_coarse(dst_offset) = htable(src_offset);
+            wgts_coarse(dst_offset) = hvals(src_offset);
+        });
+        coarse_start += compacted_width;
+        stream_compact_start += width;
+    }
 
     graph_type gc_graph(entries_coarse, coarse_row_map_f);
     matrix_t gc("gc", nc, wgts_coarse, gc_graph);
