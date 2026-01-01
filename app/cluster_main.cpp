@@ -36,16 +36,16 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#include "defs.h"
+#include "core_types.h"
 #include "io/header/io.h"
 #include "io/header/parse_args.h"
 #include "io/header/io_views.hpp"
+#include "io/header/vertex_weighting.h"
 #include "memory_store.hpp"
 #include "cluster_data.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.h"
 #include "weighted_graph.h"
-#include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include "core_types.h"
 #include <queue>
@@ -55,6 +55,8 @@ using namespace jet_community;
 using rfd_t = cluster_data;
 using wg_t = weighted_graph;
 using mem_t = memory_store;
+using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
+using vtx_mirror_t = typename vtx_view_t::HostMirror;
 namespace cm_t = clustering_methods;
 
 // checks how many components graph has after "deleting" cut edges of part_d

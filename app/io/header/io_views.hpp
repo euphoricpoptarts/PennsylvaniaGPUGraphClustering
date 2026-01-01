@@ -22,7 +22,7 @@ void write_part(view_t part_d, const char *fname){
 }
 
 template <class view_t>
-view_t load_view(ordinal_t n, const char *fname){
+view_t load_view(size_t n, const char *fname){
     std::ifstream ifp(fname);
     view_t v_d("device view", n);
     if(!ifp.is_open()){
@@ -30,7 +30,7 @@ view_t load_view(ordinal_t n, const char *fname){
         return v_d;
     }
     typename view_t::HostMirror v = Kokkos::create_mirror_view(v_d);
-    for(ordinal_t x = 0; x < n; x++){
+    for(size_t x = 0; x < n; x++){
         ifp >> v(x);
     }
     ifp.close();

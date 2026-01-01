@@ -1,13 +1,13 @@
-#include "defs.h"
+#include "core_types.h"
 #include "io/header/io.h"
 #include "io/header/parse_args.h"
 #include "io/header/io_views.hpp"
+#include "io/header/vertex_weighting.h"
 #include "weighted_graph.h"
 #include "memory_store.hpp"
 #include "cluster_data.hpp"
 #include "ExperimentLoggerUtil.hpp"
 #include "clustering_methods.h"
-#include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include <memory>
 #include <random>
@@ -17,6 +17,10 @@ using rfd_t = cluster_data;
 using wg_t = weighted_graph;
 using mem_t = memory_store;
 namespace cm_t = clustering_methods;
+using team_policy_t = Kokkos::TeamPolicy<typename Device::execution_space>;
+using member = typename team_policy_t::member_type;
+using r_policy = Kokkos::RangePolicy<typename Device::execution_space>;
+using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
 
 vtx_view_t intersection_cluster(vtx_view_t c1, vtx_view_t c2, int l2){
 
@@ -84,7 +88,7 @@ Kokkos::View<uint32_t*, Device> gen_signature(matrix_t g, vtx_view_t c, mem_t& m
             }
         }
     });
-    Kokkos::parallel_for("create signature", policy(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("create signature", team_policy_t(high, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = vtx_high(t.league_rank());
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [&](const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);

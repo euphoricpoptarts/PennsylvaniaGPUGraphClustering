@@ -1,10 +1,10 @@
-#pragma once
-#include "defs.h"
-#include "io/header/parse_args.h"
-#include "io/header/io.h"
-#include "io/header/io_views.hpp"
+#include "header/parse_args.h"
+#include "header/io_views.hpp"
+#include "core_types.h"
 
 namespace jet_community {
+using wgt_view_t = Kokkos::View<value_t*, Device>;
+using r_policy = Kokkos::RangePolicy<typename Device::execution_space>;
 
 void degree_weighting(const matrix_t& g, wgt_view_t vweights){
     Kokkos::parallel_for("set v weights", r_policy(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){

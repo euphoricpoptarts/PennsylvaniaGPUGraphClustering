@@ -3,7 +3,7 @@ add_executable(pleiden cluster_main.cpp)
 add_executable(pleiden+ cluster_main.cpp)
 add_executable(meme memetic_clustering.cpp)
 add_executable(verify_obj verify_objective.cpp)
-add_library(io STATIC io/io_mtx.cpp io/io_metis.cpp io/parse_args.cpp)
+add_library(io STATIC io/io_mtx.cpp io/io_metis.cpp io/parse_args.cpp io/vertex_weighting.cpp)
 
 set(TARGETS plouvain pleiden pleiden+ verify_obj meme io)
 set(TARGETS_FOR_IO plouvain pleiden pleiden+ verify_obj meme)

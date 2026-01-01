@@ -36,11 +36,12 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // ************************************************************************
-#include "defs.h"
+#include "core_types.h"
 #include "io/header/io.h"
 #include "io/header/parse_args.h"
+#include "io/header/vertex_weighting.h"
+#include "io/header/io_views.hpp"
 #include "weighted_graph.h"
-#include "vertex_weighting.hpp"
 #include "objective_helpers.hpp"
 #include "cluster_data.hpp"
 #include <limits>
@@ -51,6 +52,9 @@ using namespace jet_community;
 using scalar_t = ordinal_t;
 using rfd_t = cluster_data;
 using wg_t = weighted_graph;
+using wgt_view_t = Kokkos::View<value_t*, Device>;
+using r_policy = Kokkos::RangePolicy<typename Device::execution_space>;
+using vtx_view_t = Kokkos::View<ordinal_t*, Device>;
 
 template <bool uniform>
 void verify_objective(const wg_t wg, vtx_view_t labels, const base_args args){
