@@ -121,6 +121,7 @@ vtx_view_t meme_cluster(wg_t wg, const meme_args args) {
     std::vector<clustering> pop;
     ExperimentLoggerUtil<value_t> dummy;
     std::cout << std::setprecision(9);
+    std::cout << std::fixed;
     int pop_size = args.pop_size;
     int time_limit = args.time_limit;
     for(int i = 0; i < pop_size; i++){
