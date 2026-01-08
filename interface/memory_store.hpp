@@ -84,4 +84,6 @@ struct memory_store {
         s_mem(largest.numRows()),
         o_mem(largest.numRows()),
         spare_cluster_data(clone_target) {}
+
+    memory_store(const memory_store&) = delete;
 };
