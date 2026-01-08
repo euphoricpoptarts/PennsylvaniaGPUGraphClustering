@@ -72,6 +72,7 @@ namespace local_move_heuristic {
     constexpr ordinal_t NO_MOVE = -3;
     constexpr ordinal_t NEW_PART = -4;
     constexpr ordinal_t LARGE_CUTOFF = ordering::LARGE_CUTOFF;
+    constexpr float afterburner_eps = 0.1;
 
     KOKKOS_INLINE_FUNCTION uint32_t hash(uint32_t x) {
         x ^= x << 13;
@@ -263,6 +264,102 @@ void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& r
     }
 }
 
+// in this kernel every candidate move
+// is reevaluated by considering the effect of the other candidate moves
+// a move is considered to occur before another according to their potential gains
+// and the vertex ids
+template <bool uniform>
+struct afterburner_kernel {
+    const vtx_vt vtx_list;
+    const matrix_t g;
+    const vtx_vt part;
+    const vtx_vt dest_part;
+    vtx_vt swap_bit;
+    const wgt_vt vtx_w;
+    const obj_vt save_gains;
+    const float penalty_mod;
+
+    afterburner_kernel(const vtx_vt _vtx_list,
+        const wg_t& _wg,
+        const vtx_vt& _part,
+        const mem_t& _mem,
+        const refine_data& _rfd) : 
+        vtx_list(_vtx_list),
+        g(_wg.mtx),
+        part(_part),
+        dest_part(_mem.p_mem.dest_part),
+        swap_bit(_mem.s_mem.zeros1),
+        vtx_w(_wg.vtx_w),
+        save_gains(_mem.p_mem.obj_persistent),
+        penalty_mod(_rfd.get_penalty_modifier()) {}
+
+    KOKKOS_FUNCTION
+    void operator()(const ordinal_t x) const {
+        float change = 0;
+        ordinal_t i = vtx_list(x);
+        ordinal_t best = dest_part(i);
+        ordinal_t p = part(i);
+        scalar_t w = vtx_w(i);
+        float multi = w*penalty_mod;
+        float igain = save_gains(i);
+        ordinal_t hi = hash(i);
+        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
+            ordinal_t v = g.graph.entries(j);
+            float vgain = save_gains(v);
+            //adjust local gain if v has higher priority than i
+            if((vgain - igain) >= afterburner_eps || (abs(vgain - igain) < afterburner_eps && static_cast<ordinal_t>(hash(v)) < hi)){
+                ordinal_t vpart = dest_part(v);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*vtx_w(v);
+                change -= (vpart == p) ? q : 0;
+                change += (vpart == best && best != NEW_PART) ? q : 0;
+                vpart = part(v);
+                change += (vpart == p) ? q : 0;
+                change -= (vpart == best) ? q : 0;
+            }
+        }
+        if(igain + change >= 0){
+            swap_bit(i) = 1;
+        }
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()(const member& t) const {
+        float change = 0;
+        ordinal_t i = vtx_list(t.league_rank());
+        ordinal_t best = dest_part(i);
+        ordinal_t p = part(i);
+        scalar_t w = vtx_w(i);
+        float multi = w*penalty_mod;
+        float igain = save_gains(i);
+        ordinal_t hi = hash(i);
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
+            ordinal_t v = g.graph.entries(j);
+            float vgain = save_gains(v);
+            //adjust local gain if v has higher priority than i
+            if((vgain - igain) >= afterburner_eps || (abs(vgain - igain) < afterburner_eps && static_cast<ordinal_t>(hash(v)) < hi)){
+                ordinal_t vpart = dest_part(v);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(j);
+                float q = static_cast<float>(wgt) - multi*vtx_w(v);
+                update -= (vpart == p) ? q : 0;
+                update += (vpart == best && best != NEW_PART) ? q : 0;
+                vpart = part(v);
+                update += (vpart == p) ? q : 0;
+                update -= (vpart == best) ? q : 0;
+            }
+        }, change);
+        if(t.team_rank() == 0){
+            if(igain + change >= 0){
+                swap_bit(i) = 1;
+            }
+        }
+    }
+};
+
 template <bool uniform>
 vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part, refine_data& rfd, mem_t& mem){
     const matrix_t& g = wg.mtx;
@@ -280,107 +377,12 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     vtx_vt largest_vtx = Kokkos::subview(candidates, std::make_pair(biggest_begin, n_moves));
     vtx_vt swap_bit = mem.s_mem.zeros1;
     vtx_vt vtx2 = mem.s_mem.vtx2;
-    vtx_vt dest_part = mem.p_mem.dest_part;
-    obj_vt save_gains = mem.p_mem.obj_persistent;
-    float eps = 0.1;
-    // in this kernel every candidate move
-    // is reevaluated by considering the effect of the other candidate moves
-    // a move is considered to occur before another according to their potential gains
-    // and the vertex ids
-    Kokkos::parallel_for("afterburner heuristic (large vtx)", team_policy_t(big, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        float change = 0;
-        ordinal_t i = large_vtx(t.league_rank());
-        ordinal_t best = dest_part(i);
-        ordinal_t p = part(i);
-        scalar_t w = wg.vtx_w(i);
-        float multi = w*penalty_mod;
-        float igain = save_gains(i);
-        ordinal_t hi = hash(i);
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
-            ordinal_t v = g.graph.entries(j);
-            float vgain = save_gains(v);
-            //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
-                ordinal_t vpart = dest_part(v);
-                scalar_t wgt;
-                if constexpr(uniform) wgt = 1;
-                else wgt = g.values(j);
-                float q = static_cast<float>(wgt) - multi*wg.vtx_w(v);
-                update -= (vpart == p) ? q : 0;
-                update += (vpart == best && best != NEW_PART) ? q : 0;
-                vpart = part(v);
-                update += (vpart == p) ? q : 0;
-                update -= (vpart == best) ? q : 0;
-            }
-        }, change);
-        if(t.team_rank() == 0){
-            if(igain + change >= 0){
-                swap_bit(i) = 1;
-            }
-        }
-    });
-    Kokkos::parallel_for("afterburner heuristic (large vtx)", team_policy_t(biggest, 1024), KOKKOS_LAMBDA(const member& t){
-        float change = 0;
-        ordinal_t i = largest_vtx(t.league_rank());
-        ordinal_t best = dest_part(i);
-        ordinal_t p = part(i);
-        scalar_t w = wg.vtx_w(i);
-        float multi = w*penalty_mod;
-        float igain = save_gains(i);
-        ordinal_t hi = hash(i);
-        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [&](const edge_offset_t j, float& update){
-            ordinal_t v = g.graph.entries(j);
-            float vgain = save_gains(v);
-            //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
-                ordinal_t vpart = dest_part(v);
-                scalar_t wgt;
-                if constexpr(uniform) wgt = 1;
-                else wgt = g.values(j);
-                float q = static_cast<float>(wgt) - multi*wg.vtx_w(v);
-                update -= (vpart == p) ? q : 0;
-                update += (vpart == best && best != NEW_PART) ? q : 0;
-                vpart = part(v);
-                update += (vpart == p) ? q : 0;
-                update -= (vpart == best) ? q : 0;
-            }
-        }, change);
-        if(t.team_rank() == 0){
-            if(igain + change >= 0){
-                swap_bit(i) = 1;
-            }
-        }
-    });
-    Kokkos::parallel_for("afterburner heuristic (small vtx)", policy_t(0, small), KOKKOS_LAMBDA(const ordinal_t& x){
-        float change = 0;
-        ordinal_t i = small_vtx(x);
-        ordinal_t best = dest_part(i);
-        ordinal_t p = part(i);
-        scalar_t w = wg.vtx_w(i);
-        float multi = w*penalty_mod;
-        float igain = save_gains(i);
-        ordinal_t hi = hash(i);
-        for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++){
-            ordinal_t v = g.graph.entries(j);
-            float vgain = save_gains(v);
-            //adjust local gain if v has higher priority than i
-            if((vgain - igain) >= eps || (abs(vgain - igain) < eps && static_cast<ordinal_t>(hash(v)) < hi)){
-                ordinal_t vpart = dest_part(v);
-                scalar_t wgt;
-                if constexpr(uniform) wgt = 1;
-                else wgt = g.values(j);
-                float q = static_cast<float>(wgt) - multi*wg.vtx_w(v);
-                change -= (vpart == p) ? q : 0;
-                change += (vpart == best && best != NEW_PART) ? q : 0;
-                vpart = part(v);
-                change += (vpart == p) ? q : 0;
-                change -= (vpart == best) ? q : 0;
-            }
-        }
-        if(igain + change >= 0){
-            swap_bit(i) = 1;
-        }
-    });
+    afterburner_kernel<uniform> afterburner_small(small_vtx, wg, part, mem, rfd);
+    afterburner_kernel<uniform> afterburner_large(large_vtx, wg, part, mem, rfd);
+    afterburner_kernel<uniform> afterburner_largest(largest_vtx, wg, part, mem, rfd);
+    Kokkos::parallel_for("afterburner heuristic (small vtx)", policy_t(0, small), afterburner_small);
+    Kokkos::parallel_for("afterburner heuristic (large vtx)", team_policy_t(big, Kokkos::AUTO), afterburner_large);
+    Kokkos::parallel_for("afterburner heuristic (largest vtx)", team_policy_t(biggest, 1024), afterburner_largest);
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     //scan all vertices that passed the post filter
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, n_moves), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
@@ -627,7 +629,6 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     // also can't use a team here because we want to be able to exit the loop early
     Kokkos::parallel_for("check adjacent", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t i){
         if(swap_bit(i) == 1) return;
-        //mark adjacent vertices
         edge_offset_t limit = g.graph.row_map(i) + LARGE_CUTOFF;
         if(g.graph.row_map(i+1) < limit) limit = g.graph.row_map(i+1);
         for(edge_offset_t j = g.graph.row_map(i); j < limit; j++){
