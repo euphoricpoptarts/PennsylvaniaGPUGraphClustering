@@ -589,11 +589,6 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
     // order1 is already organized into two buckets by degree > or <= 128
-    // ordinal_t fuckups = 0;
-    // Kokkos::parallel_reduce("count fuckups", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update){
-    //     if(dest_part(i) == NULL_PART) update++;
-    // }, fuckups);
-    // std::cout << "Num fuckups: " << fuckups << std::endl;
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
