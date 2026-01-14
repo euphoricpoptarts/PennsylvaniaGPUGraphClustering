@@ -553,12 +553,12 @@ struct select_destinations {
 // determines which vertices (if any) should be moved to another part to improve objective
 // uniform should be true if and only if c_graph is the top level input graph, and that graph is uniformly edge-weighted
 template <bool uniform, bool constrained>
-vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
+vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint, int iter){
     const matrix_t& g = wg.mtx;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
     vtx_vt dest_part = mem.p_mem.dest_part;
-    vtx_vt vtx1 = mem.s_mem.vtx1;
+    vtx_vt vtx2 = mem.s_mem.vtx2;
     vtx_vt order1 = mem.o_mem.order1;
     ordinal_t big_begin = mem.o_mem.offset_large;
     ordinal_t biggest_begin = mem.o_mem.offset_large2;
@@ -584,6 +584,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     vtx_pin_st pin_host2 = mem.s_mem.pin_host2;
     big_begin = mem.o_mem.offset_large;
     biggest_begin = mem.o_mem.offset_large2;
+    bool is_odd = ((iter & 1) == 1);
     // write all unlocked vertices that passed the above filter into an unordered list
     // output count of such vertices into num_pos
     // order1 is already organized into two buckets by degree > or <= 128
@@ -595,11 +596,21 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         }
         ordinal_t i = order1(x);
         ordinal_t best = dest_part(i);
-        if(best != NO_MOVE){
-            if(final){
-                vtx1(update) = i;
+        // mlh on odd iterations
+        if(is_odd) {
+            if(best != NO_MOVE && best < part(i)){
+                if(final){
+                    vtx2(update) = i;
+                }
+                update++;
             }
-            update++;
+        } else {
+            if(best != NO_MOVE){
+                if(final){
+                    vtx2(update) = i;
+                }
+                update++;
+            }
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
@@ -615,7 +626,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         mem.o_mem.last_scan_large2 = num_pos;
     }
     //truncate scratch views by num_pos
-    vtx_vt candidates = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
+    vtx_vt candidates = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
 
     return candidates;
 }
@@ -1269,7 +1280,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     // and it might still be needed if that never happens
     clone_pval(mem, g.numRows());
     int iter_count = 0;
-    std::vector<float> filter_ratios = {0.75, 0.25};
+    std::vector<float> filter_ratios = {0, 0};
     std::vector<int> limits = {4, 2};
     for(size_t x = 0; x < filter_ratios.size(); x++){
         float filter_ratio = filter_ratios[x];
@@ -1283,11 +1294,11 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
                 // use the input graph in place of the conn graph
                 c_graph = g;
             }
-            if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
-            else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+            if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint, iter_count - 1);
+            else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint, iter_count - 1);
             if(moves.extent(0) == 0) break;
-            if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
-            else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
+            // if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
+            // else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
             if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state);
             else perform_moves<false>(wg, part, moves, cdata, mem, curr_state);
@@ -1333,8 +1344,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
-        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
+        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint, i);
+        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint, i);
 
         // move list needs to be in vtx2 or else bad things happen
         // that normally happens in the afterburner, which isn't called here
