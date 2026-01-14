@@ -462,7 +462,7 @@ struct select_destinations {
     KOKKOS_FUNCTION
     void operator()(const ordinal_t x) const {
         ordinal_t i = truncated ? x : vtx_list(x);
-        if(dest_part(i) == NO_MOVE){
+        if(dest_part(i) != NULL_PART){
             return;
         }
         ordinal_t best = NO_MOVE;
@@ -505,7 +505,7 @@ struct select_destinations {
     KOKKOS_INLINE_FUNCTION
     void operator()(const member& t) const {
         ordinal_t i = vtx_list(t.league_rank());
-        if(dest_part(i) == NO_MOVE){
+        if(dest_part(i) != NULL_PART){
             return;
         }
         ordinal_t team_size = t.team_size();
@@ -553,7 +553,7 @@ struct select_destinations {
 // determines which vertices (if any) should be moved to another part to improve objective
 // uniform should be true if and only if c_graph is the top level input graph, and that graph is uniformly edge-weighted
 template <bool uniform, bool constrained>
-vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint, bool cdata_init){
+vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, const vtx_vt& part, refine_data& rfd, mem_t& mem, float filter_ratio, vtx_vt constraint){
     const matrix_t& g = wg.mtx;
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
@@ -567,20 +567,18 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     vtx_vt largest_vtx = Kokkos::subview(order1, std::make_pair(biggest_begin, n));
     // if input label count is smaller than LARGE_CUTOFF, then all tables are also smaller than LARGE_CUTOFF
     // TODO: not true due to *2
-    if(!cdata_init){
-        bool truncated = (rfd.label_count <= LARGE_CUTOFF);
-        if(truncated){
-            select_destinations<uniform, constrained> select_small(small_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, true);
-            Kokkos::parallel_for("argmax destination part (small vtx)", policy_t(0, n), select_small);
-        }
-        else {
-            select_destinations<uniform, constrained> select_small(small_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
-            select_destinations<uniform, constrained> select_large(large_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
-            select_destinations<uniform, constrained> select_largest(largest_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
-            Kokkos::parallel_for("argmax destination part (small vtx)", policy_t(0, big_begin), select_small);
-            Kokkos::parallel_for("argmax destination part (large vtx)", team_policy_t(biggest_begin - big_begin, Kokkos::AUTO), select_large);
-            Kokkos::parallel_for("argmax destination part (largest vtx)", team_policy_t(n - biggest_begin, 1024), select_largest);
-        }
+    bool truncated = (rfd.label_count <= LARGE_CUTOFF);
+    if(truncated){
+        select_destinations<uniform, constrained> select_small(small_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, true);
+        Kokkos::parallel_for("argmax destination part (small vtx)", policy_t(0, n), select_small);
+    }
+    else {
+        select_destinations<uniform, constrained> select_small(small_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
+        select_destinations<uniform, constrained> select_large(large_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
+        select_destinations<uniform, constrained> select_largest(largest_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
+        Kokkos::parallel_for("argmax destination part (small vtx)", policy_t(0, big_begin), select_small);
+        Kokkos::parallel_for("argmax destination part (large vtx)", team_policy_t(biggest_begin - big_begin, Kokkos::AUTO), select_large);
+        Kokkos::parallel_for("argmax destination part (largest vtx)", team_policy_t(n - biggest_begin, 1024), select_largest);
     }
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     vtx_pin_st pin_host2 = mem.s_mem.pin_host2;
@@ -1019,12 +1017,12 @@ struct update_cdata {
         if(save_gains(i) != oldmaxl) argmax = n + 1;
         t.team_reduce(Kokkos::Min<ordinal_t, mem_space>(dest_part(i)), argmax);
 
-        // if(uses_shared && size < max_size){
-        //     Kokkos::parallel_for(Kokkos::TeamThreadRange(t, c_start, c_end), [&] (const edge_offset_t& j) {
-        //         cdata.conn_entries(j) = s_conn_entries[j - c_start];
-        //         cdata.conn_vals(j) = s_conn_vals[j - c_start];
-        //     });
-        // }
+        if(uses_shared && size < max_size){
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, c_start, c_end), [&] (const edge_offset_t& j) {
+                cdata.conn_entries(j) = s_conn_entries[j - c_start];
+                cdata.conn_vals(j) = s_conn_vals[j - c_start];
+            });
+        }
     }
 };
 
@@ -1233,7 +1231,7 @@ void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cda
         Kokkos::atomic_add(&total_deg(best), vtx_w(i));
     });
     //change part assignments and update part sizes
-    if(true || !cdata.init || total_moves >= wg.mtx.numRows() * 0.03){
+    if(!cdata.init || total_moves >= wg.mtx.numRows() * 0.03){
         // update cluster ids before updating datastructures
         Kokkos::parallel_for("update parts", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
             ordinal_t i = swaps(x);
@@ -1246,10 +1244,10 @@ void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cda
         } else {
             update_large<uniform>(wg, part, swaps, cdata, mem, curr_state, filter_ratio);
         }
-    }// else {
+    } else {
         // cluster ids updated inside this function
-    //     update_small<uniform>(wg, part, swaps, dest_part, cdata, mem);
-    // }
+        update_small<uniform>(wg, part, swaps, dest_part, cdata, mem);
+    }
     scalar_t curr_pval = pval_sum(pvals, wg.mtx.numRows());
     scalar_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
@@ -1369,8 +1367,8 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint, cdata.init);
-        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint, cdata.init);
+        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
         if(moves.extent(0) == 0) break;
         if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
         else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
@@ -1418,8 +1416,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
             // use the input graph in place of the conn graph
             c_graph = g;
         }
-        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint, cdata.init);
-        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint, cdata.init);
+        if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
+        else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, 0, constraint);
 
         // move list needs to be in vtx2 or else bad things happen
         // that normally happens in the afterburner, which isn't called here
