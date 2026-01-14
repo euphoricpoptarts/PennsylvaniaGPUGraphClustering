@@ -823,19 +823,19 @@ struct update_cdata {
     KOKKOS_INLINE_FUNCTION
     void operator()(const ordinal_t& x) const {
         const ordinal_t i = vtx_list(x);
-        edge_offset_t g_start = cdata.conn_offsets(i);
-        edge_offset_t g_end = cdata.conn_offsets(i + 1);
+        edge_offset_t c_start = cdata.conn_offsets(i);
+        edge_offset_t c_end = cdata.conn_offsets(i + 1);
         if constexpr(!initial){
-            for(edge_offset_t j = g_start; j < g_end; j++) {
+            for(edge_offset_t j = c_start; j < c_end; j++) {
                 if(cdata.conn_entries(j) != NULL_PART){
                     cdata.conn_entries(j) = NULL_PART;
                     cdata.conn_vals(j) = 0;
                 }
             }
         }
-        ordinal_t size = g_end - g_start;
-        ordinal_t* s_conn_entries = cdata.conn_entries.data() + g_start;
-        scalar_t* s_conn_vals = cdata.conn_vals.data() + g_start;
+        ordinal_t size = c_end - c_start;
+        ordinal_t* s_conn_entries = cdata.conn_entries.data() + c_start;
+        scalar_t* s_conn_vals = cdata.conn_vals.data() + c_start;
         scalar_t update = 0;
         ordinal_t p_i = part(i);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i + 1); j++) {
@@ -871,9 +871,9 @@ struct update_cdata {
     KOKKOS_INLINE_FUNCTION
     void operator()(const member& t) const {
         const ordinal_t i = vtx_list(t.league_rank());
-        edge_offset_t g_start = cdata.conn_offsets(i);
-        edge_offset_t g_end = cdata.conn_offsets(i + 1);
-        ordinal_t size = g_end - g_start;
+        edge_offset_t c_start = cdata.conn_offsets(i);
+        edge_offset_t c_end = cdata.conn_offsets(i + 1);
+        ordinal_t size = c_end - c_start;
         ordinal_t* s_conn_entries;
         scalar_t* s_conn_vals;
         if(uses_shared && size < max_size){
@@ -887,8 +887,8 @@ struct update_cdata {
             });
             t.team_barrier();
         } else {
-            s_conn_entries = cdata.conn_entries.data() + g_start;
-            s_conn_vals = cdata.conn_vals.data() + g_start;
+            s_conn_entries = cdata.conn_entries.data() + c_start;
+            s_conn_vals = cdata.conn_vals.data() + c_start;
             if constexpr(!initial){
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, size), [&] (const edge_offset_t& j) {
                     s_conn_entries[j] = NULL_PART;
@@ -932,9 +932,9 @@ struct update_cdata {
             Kokkos::atomic_add(s_conn_vals + p_o, wgt);
         }, pvals(i));
         if(uses_shared && size < max_size){
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_start, g_end), [&] (const edge_offset_t& j) {
-                cdata.conn_entries(j) = s_conn_entries[j - g_start];
-                cdata.conn_vals(j) = s_conn_vals[j - g_start];
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, c_start, c_end), [&] (const edge_offset_t& j) {
+                cdata.conn_entries(j) = s_conn_entries[j - c_start];
+                cdata.conn_vals(j) = s_conn_vals[j - c_start];
             });
         }
     }
