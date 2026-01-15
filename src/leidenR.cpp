@@ -86,8 +86,10 @@ namespace leidenR {
         float gamma = rfd.get_penalty_modifier();
         vtx_vt order1 = mem.o_mem.order1;
         ordinal_t big_begin = mem.o_mem.offset_large;
+        ordinal_t biggest_begin = mem.o_mem.offset_large2;
         vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), big_begin));
-        vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, n));
+        vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(big_begin, biggest_begin));
+        vtx_vt largest_vtx = Kokkos::subview(order1, std::make_pair(biggest_begin, n));
         Kokkos::parallel_for("compute inner_conn", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x) {
             ordinal_t i = small_vtx(x);
             edge_offset_t end = g.graph.row_map(i + 1);
@@ -102,8 +104,20 @@ namespace leidenR {
             }
             inner_conn(i) = result;
         });
-        Kokkos::parallel_for("compute inner_conn", team_policy_t(n - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
+        Kokkos::parallel_for("compute inner_conn", team_policy_t(biggest_begin - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member & thread) {
             ordinal_t i = large_vtx(thread.league_rank());
+            edge_offset_t end = g.graph.row_map(i + 1);
+            edge_offset_t start = g.graph.row_map(i);
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, scalar_t& update) {
+                ordinal_t v = g.graph.entries(idx);
+                scalar_t wgt;
+                if constexpr(uniform) wgt = 1;
+                else wgt = g.values(idx);
+                if(vcmap(i) == vcmap(v) && order(v) < order(i)) update += wgt;
+            }, inner_conn(i));
+        });
+        Kokkos::parallel_for("compute inner_conn", team_policy_t(n - biggest_begin, 1024), KOKKOS_LAMBDA(const member & thread) {
+            ordinal_t i = largest_vtx(thread.league_rank());
             edge_offset_t end = g.graph.row_map(i + 1);
             edge_offset_t start = g.graph.row_map(i);
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const edge_offset_t idx, scalar_t& update) {
