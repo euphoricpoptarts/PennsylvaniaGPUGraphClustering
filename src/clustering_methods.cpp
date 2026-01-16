@@ -74,11 +74,15 @@ namespace clustering_methods {
             }
             vtx_vt louv = part;
             int coarse_vtx_count = 0;
+            Kokkos::fence();
+            Kokkos::Timer lr_time;
             vtx_vt coarse_map;
             if(levels.size() == 1 && c.edge_uniform) coarse_map = lr_t::template coarsen_leidenR<true, true>(c, louv, mem, rfd, coarse_vtx_count);
             else if(levels.size() == 1 && !(c.edge_uniform)) coarse_map = lr_t::template coarsen_leidenR<true, false>(c, louv, mem, rfd, coarse_vtx_count);
             else coarse_map = lr_t::template coarsen_leidenR<false, false>(c, louv, mem, rfd, coarse_vtx_count);
             parts.push_back(coarse_map);
+            Kokkos::fence();
+            experiment.addMeasurement(Measurement::LeidenRefine, lr_time.seconds());
             if(coarse_vtx_count < c.mtx.numRows()){
                 Kokkos::Timer t;
                 wg_t next_level;

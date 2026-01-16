@@ -49,7 +49,7 @@ namespace jet_community {
 enum class Measurement : int {
 	Contract,
     Coarsen,
-    Refine,
+    LeidenRefine,
     FreeGraph,
     Total,
 	END
@@ -62,7 +62,7 @@ public:
 	std::vector<std::string> measurementNames{
 		"coarsen-contract",
         "coarsen",
-        "refine",
+        "leiden-refine",
         "free-graph",
         "total",
 	};
