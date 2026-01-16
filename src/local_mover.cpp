@@ -1249,7 +1249,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
 }
 
 template <bool constrained>
-void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1272,7 +1272,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     std::vector<float> filter_ratios = {0.75, 0.25};
     std::vector<int> limits = {4, 2};
     for(size_t x = 0; x < filter_ratios.size(); x++){
-        float filter_ratio = filter_ratios[x];
+        float filter_ratio = enable_simulated_annealing ? filter_ratios[x] : 0;
         int limit = limits[x];
         int count = 0;
         while(count++ < limit){
@@ -1369,8 +1369,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
 }
 
     // explicit template instantiations
-    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
+    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
 
     template void local_move_strict<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
     template void local_move_strict<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
