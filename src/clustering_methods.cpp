@@ -73,17 +73,23 @@ namespace clustering_methods {
             }
             vtx_vt louv = part;
             int coarse_vtx_count = 0;
+#ifdef EXTRA_TIMING
             Kokkos::fence();
             Kokkos::Timer lr_time;
+#endif
             vtx_vt coarse_map;
             if(levels.size() == 1 && c.edge_uniform) coarse_map = lr_t::template coarsen_leidenR<true, true>(c, louv, mem, rfd, coarse_vtx_count);
             else if(levels.size() == 1 && !(c.edge_uniform)) coarse_map = lr_t::template coarsen_leidenR<true, false>(c, louv, mem, rfd, coarse_vtx_count);
             else coarse_map = lr_t::template coarsen_leidenR<false, false>(c, louv, mem, rfd, coarse_vtx_count);
             parts.push_back(coarse_map);
+#ifdef EXTRA_TIMING
             Kokkos::fence();
             experiment.addMeasurement(Measurement::LeidenRefine, lr_time.seconds());
+#endif
             if(coarse_vtx_count < c.mtx.numRows()){
+#ifdef EXTRA_TIMING
                 Kokkos::Timer t;
+#endif
                 wg_t next_level;
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
@@ -92,9 +98,12 @@ namespace clustering_methods {
 
                 part = vtx_vt("cluster assignments coarse", coarse_vtx_count);
                 downsample(louv, part, coarse_map);
-
                 levels.push_back(next_level);
+
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 aggregate += t.seconds();
+#endif
             } else {
                 // avoid creating new graph if leidenR didn't contract any vertices
                 // which may happen with astronomically low probability for any input clustering
@@ -148,7 +157,10 @@ namespace clustering_methods {
             }
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 Kokkos::Timer t;
+#endif
                 wg_t next_level;
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
@@ -163,7 +175,10 @@ namespace clustering_methods {
                     constraint = next_constraint;
                 }
 
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 aggregate += t.seconds();
+#endif
             } else if(drop_constraint) {
                 Kokkos::deep_copy(constraint, 0);
                 parts.pop_back();
