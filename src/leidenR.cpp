@@ -334,8 +334,9 @@ namespace leidenR {
             });
             // I didn't think this would ever be necessary
             // I thought very high degree vertices would have many viable choices such that it would be quick to find one
-            // but it turns out such vertices may have very few viable choices
-            // I assume because `multi` is very large in such cases
+            // If good clusterings are correlated with the vertex ordering,
+            // then choosing a random search starting point could drop us in the middle of a chunk of vertices in different constraint clusters
+            // This would lead to traversing a large number of vertices before finding a viable edge
             Kokkos::parallel_for("select random edge", team_policy_t(n - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t) {
                 ordinal_t i = largest_vtx(t.league_rank());
                 edge_offset_t end = g.graph.row_map(i + 1);
