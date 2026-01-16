@@ -56,7 +56,6 @@ namespace clustering_methods {
         } else Kokkos::deep_copy(part, input);
         while(true) {
             wg_t c = levels[levels.size() - 1];
-            // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
@@ -104,10 +103,7 @@ namespace clustering_methods {
             }
         }
 
-        // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
         experiment.addMeasurement(Measurement::Contract, aggregate);
-        // std::cout << rfd.obj << std::endl;
-        // std::cout << rfd.label_count << std::endl;
         int64_t t_nnz = 0;
         for(const wg_t& level : levels){
             t_nnz += level.mtx.nnz();
@@ -139,7 +135,6 @@ namespace clustering_methods {
         bool drop_constraint = constrained;
         while(true) {
             wg_t c = levels[levels.size() - 1];
-            // std::cout << "Pre-refine" << std::endl;
             vtx_vt part("cluster assignments", c.mtx.numRows());
             Kokkos::parallel_for("set initial assignments", policy_t(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = x;
@@ -185,7 +180,6 @@ namespace clustering_methods {
         experiment.setTotalNnz(t_nnz);
         experiment.setLevelCount(levels.size());
 
-        // std::cout << "Post coarsen obj: " << rfd.obj << std::endl;
         if(levels.size() > 1){
             // last level has the same partition as previous level
             // so refining this level on the uncoarsening pass
@@ -207,7 +201,6 @@ namespace clustering_methods {
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);
-        // std::cout << "Post uncoarsen obj: " << rfd.obj << std::endl;
         return parts[0];
     }
 
