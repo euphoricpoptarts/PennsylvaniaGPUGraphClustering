@@ -390,7 +390,8 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, n_moves), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(final && i == big_begin){
             pin_host() = update;
-        } else if(final && i == biggest_begin){
+        }
+        if(final && i == biggest_begin){
             pin_host2() = update;
         }
         if(swap_bit(candidates(i))){
@@ -403,18 +404,19 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
-    if(big_begin < n_moves){
+    ordinal_t old_n_moves = n_moves;
+    n_moves = mem.s_mem.scan_host();
+    if(big_begin < old_n_moves){
         // this must be set for find_affected_smaller
         mem.o_mem.last_scan_large = pin_host();
     } else {
-        mem.o_mem.last_scan_large = mem.s_mem.scan_host();
+        mem.o_mem.last_scan_large = n_moves;
     }
-    if(biggest_begin < n_moves){
+    if(biggest_begin < old_n_moves){
         mem.o_mem.last_scan_large2 = pin_host2();
     } else {
-        mem.o_mem.last_scan_large2 = mem.s_mem.scan_host();
+        mem.o_mem.last_scan_large2 = n_moves;
     }
-    n_moves = mem.s_mem.scan_host();
     vtx_vt moves = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), n_moves));
 
     return moves;
@@ -590,7 +592,8 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order1(x);
@@ -690,7 +693,8 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order2(x);
@@ -768,7 +772,8 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order2(x);
