@@ -123,6 +123,7 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
+// select the prefix of the given movelist that maximizes objective delta
 template <bool uniform>
 vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem, double& diff) {
     const matrix_t& g = wg.mtx;
@@ -206,6 +207,8 @@ vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_v
     return output_moves;
 }
 
+// for vertices set to move a new (as in not currently existing) cluster
+// find a valid unused cluster id
 template <bool constrained>
 void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& rfd, mem_t& mem, vtx_vt constraint){
 
@@ -361,6 +364,8 @@ struct afterburner_kernel {
     }
 };
 
+// re-evaluates candidate moves in the context of each other, using an ordering condition
+// negative gain candidates are filtered out
 template <bool uniform>
 vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part, refine_data& rfd, mem_t& mem){
     const matrix_t& g = wg.mtx;
@@ -624,6 +629,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
 }
 
 // stream-compacts order2 for the vertices adjacent to any changed vertex
+// assumes a large percentage of all vertices are moved
 vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
@@ -724,6 +730,8 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     return vtx1;
 }
 
+// stream-compacts order2 for the vertices adjacent to any changed vertex
+// assumes a smaller percentage of vertices are moved than find_affected
 vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
@@ -1134,7 +1142,6 @@ scalar_t pval_sum(wgt_vt pvals, ordinal_t n){
 }
 
 //perform swaps, update gains, and compute change to cut and imbalance
-//4 kernels, 1 device-host syncs
 template <bool uniform>
 void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem, refine_data& curr_state){
     const wgt_vt& vtx_w = wg.vtx_w;
@@ -1253,6 +1260,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
     Kokkos::deep_copy(exec_space(), pval_clone_subview, pval_subview);
 }
 
+// moves vertices between clusters such that the objective increases
 template <bool constrained>
 void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
     const matrix_t g = wg.mtx;
@@ -1290,9 +1298,13 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
             }
             if(wg.edge_uniform && !cdata.init) moves = candidates_and_destinations<true, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
             else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
+            // anytime there are zero candidate moves, the local move procedure can not progress
             if(moves.extent(0) == 0) break;
             if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
             else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
+            // if all candidates have negative gain, it is possible that none are selected by the afterburner
+            // in this case, progress may be possible with a different filter ratio, but significant progress from this state is unlikely
+            if(moves.extent(0) == 0) break;
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
             if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state);
             else perform_moves<false>(wg, part, moves, cdata, mem, curr_state);
