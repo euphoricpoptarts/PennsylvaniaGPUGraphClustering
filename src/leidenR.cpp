@@ -31,6 +31,7 @@ namespace leidenR {
     // the problem will be fixed soon, use MaxFirstLoc in meantime
     using argmax_reducer_t = Kokkos::MaxFirstLoc<float, edge_offset_t, Device>;
     using argmax_t = typename argmax_reducer_t::value_type;
+    using min_reducer_t = Kokkos::Min<edge_offset_t, Device>;
     using hasher_t = Kokkos::pod_hash<ordinal_t>;
     constexpr ordinal_t ORD_MAX = std::numeric_limits<ordinal_t>::max();
     constexpr ordinal_t split = 1000000000;
@@ -286,7 +287,12 @@ namespace leidenR {
         std::random_device rd;
         if(uniform){
             ordinal_t seed = rd();
-            Kokkos::parallel_for("select random edge", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i) {
+            vtx_vt order1 = mem.o_mem.order1;
+            ordinal_t biggest_begin = mem.o_mem.offset_large2;
+            vtx_vt smaller_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), biggest_begin));
+            vtx_vt largest_vtx = Kokkos::subview(order1, std::make_pair(biggest_begin, n));
+            Kokkos::parallel_for("select random edge", policy_t(0, biggest_begin), KOKKOS_LAMBDA(const ordinal_t x) {
+                ordinal_t i = smaller_vtx(x);
                 edge_offset_t end = g.graph.row_map(i + 1);
                 edge_offset_t start = g.graph.row_map(i);
                 ordinal_t width = end - start;
@@ -325,6 +331,63 @@ namespace leidenR {
                     }
                 }
                 hn(i) = i;
+            });
+            // I didn't think this would ever be necessary
+            // I thought very high degree vertices would have many viable choices such that it would be quick to find one
+            // If good clusterings are correlated with the vertex ordering,
+            // then choosing a random search starting point could drop us in the middle of a chunk of vertices in different constraint clusters
+            // This would lead to traversing a large number of vertices before finding a viable edge
+            Kokkos::parallel_for("select random edge", team_policy_t(n - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t) {
+                ordinal_t i = largest_vtx(t.league_rank());
+                edge_offset_t end = g.graph.row_map(i + 1);
+                edge_offset_t start = g.graph.row_map(i);
+                ordinal_t width = end - start;
+                float multi = gamma*vtx_w(i);
+                hasher_t hash;
+                edge_offset_t jx = hash(seed + i);
+                // 0.001 chance to self-aggregate
+                if(jx % 1000 == 0 || well_conn(i) == 0){
+                    hn(i) = i;
+                    return;
+                }
+                jx = start + (jx % static_cast<uint32_t>(width));
+                // choose random satisfactory neighbor
+                edge_offset_t result = end;
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, jx, end), [=](const edge_offset_t j, edge_offset_t& local) {
+                    ordinal_t v = g.graph.entries(j);
+                    if(constraint(i) != constraint(v)) return;
+                    if(well_conn(v) == 0) return;
+                    scalar_t wgt;
+                    if constexpr(uniform) wgt = 1;
+                    else wgt = g.values(j);
+                    if(wgt >= multi*vtx_w(v)){
+                        if(j < local){
+                            local = j;
+                        }
+                    }
+                }, min_reducer_t(result));
+                if(result < end) {
+                    hn(i) = g.graph.entries(result);
+                    return;
+                }
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, start, jx), [=](const edge_offset_t j, edge_offset_t& local) {
+                    ordinal_t v = g.graph.entries(j);
+                    if(constraint(i) != constraint(v)) return;
+                    if(well_conn(v) == 0) return;
+                    scalar_t wgt;
+                    if constexpr(uniform) wgt = 1;
+                    else wgt = g.values(j);
+                    if(wgt >= multi*vtx_w(v)){
+                        if(j < local){
+                            local = j;
+                        }
+                    }
+                }, min_reducer_t(result));
+                if(result < end) {
+                    hn(i) = g.graph.entries(result);
+                } else {
+                    hn(i) = i;
+                }
             });
         } else {
             vtx_vt order1 = mem.o_mem.order1;

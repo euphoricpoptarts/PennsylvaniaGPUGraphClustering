@@ -5,5 +5,6 @@ target_sources(cluster PRIVATE
     local_mover.cpp
     clustering_methods.cpp
     ordering.cpp)
+#target_compile_definitions(cluster PRIVATE EXTRA_TIMING)
 target_include_directories(cluster PRIVATE ${CMAKE_SOURCE_DIR}/interface)
 target_link_libraries(cluster PRIVATE Kokkos::kokkos Kokkos::kokkoskernels)
