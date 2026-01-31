@@ -565,7 +565,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     ordinal_t n = g.numRows();
     ordinal_t num_pos = 0;
     vtx_vt dest_part = mem.p_mem.dest_part;
-    vtx_vt vtx1 = mem.s_mem.vtx1;
+    vtx_vt vtx2 = mem.s_mem.vtx2;
     vtx_vt order1 = mem.o_mem.order1;
     ordinal_t big_begin = mem.o_mem.offset_large;
     ordinal_t biggest_begin = mem.o_mem.offset_large2;
@@ -605,7 +605,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         ordinal_t best = dest_part(i);
         if(best != NO_MOVE){
             if(final){
-                vtx1(update) = i;
+                vtx2(update) = i;
             }
             update++;
         }
@@ -623,7 +623,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         mem.o_mem.last_scan_large2 = num_pos;
     }
     //truncate scratch views by num_pos
-    vtx_vt candidates = Kokkos::subview(vtx1, std::make_pair(static_cast<ordinal_t>(0), num_pos));
+    vtx_vt candidates = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), num_pos));
 
     return candidates;
 }
@@ -1355,6 +1355,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
 // moves vertices between clusters such that the objective increases
 template <bool constrained>
 void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
+    enable_simulated_annealing = false;
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1392,11 +1393,11 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
             else moves = candidates_and_destinations<false, constrained>(wg, c_graph, part, curr_state, mem, filter_ratio, constraint);
             // anytime there are zero candidate moves, the local move procedure can not progress
             if(moves.extent(0) == 0) break;
-            if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
-            else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
+            // if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
+            // else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
             // if all candidates have negative gain, it is possible that none are selected by the afterburner
             // in this case, progress may be possible with a different filter ratio, but significant progress from this state is unlikely
-            if(moves.extent(0) == 0) break;
+            // if(moves.extent(0) == 0) break;
             if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
             if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state);
             else perform_moves<false>(wg, part, moves, cdata, mem, curr_state);
