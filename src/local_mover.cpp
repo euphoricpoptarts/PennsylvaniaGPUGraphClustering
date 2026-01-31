@@ -123,6 +123,7 @@ void relabel_contiguously(vtx_vt labels, refine_data& rfd, mem_t& mem){
     rfd.label_count = t_labels;
 }
 
+// select the prefix of the given movelist that maximizes objective delta
 template <bool uniform>
 vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_vt& part, refine_data& rfd, mem_t& mem, double& diff) {
     const matrix_t& g = wg.mtx;
@@ -206,6 +207,8 @@ vtx_vt afterburner_filter_strict(const wg_t& wg, const vtx_vt moves, const vtx_v
     return output_moves;
 }
 
+// for vertices set to move a new (as in not currently existing) cluster
+// find a valid unused cluster id
 template <bool constrained>
 void set_new_cluster_ids(const vtx_vt& moves, const vtx_vt& part, refine_data& rfd, mem_t& mem, vtx_vt constraint){
 
@@ -361,6 +364,8 @@ struct afterburner_kernel {
     }
 };
 
+// re-evaluates candidate moves in the context of each other, using an ordering condition
+// negative gain candidates are filtered out
 template <bool uniform>
 vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part, refine_data& rfd, mem_t& mem){
     const matrix_t& g = wg.mtx;
@@ -390,7 +395,8 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     Kokkos::parallel_scan("filter beneficial moves", policy_t(0, n_moves), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
         if(final && i == big_begin){
             pin_host() = update;
-        } else if(final && i == biggest_begin){
+        }
+        if(final && i == biggest_begin){
             pin_host2() = update;
         }
         if(swap_bit(candidates(i))){
@@ -403,18 +409,19 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
         }
     }, mem.s_mem.scan_host);
     exec_space().fence();
-    if(big_begin < n_moves){
+    ordinal_t old_n_moves = n_moves;
+    n_moves = mem.s_mem.scan_host();
+    if(big_begin < old_n_moves){
         // this must be set for find_affected_smaller
         mem.o_mem.last_scan_large = pin_host();
     } else {
-        mem.o_mem.last_scan_large = mem.s_mem.scan_host();
+        mem.o_mem.last_scan_large = n_moves;
     }
-    if(biggest_begin < n_moves){
+    if(biggest_begin < old_n_moves){
         mem.o_mem.last_scan_large2 = pin_host2();
     } else {
-        mem.o_mem.last_scan_large2 = mem.s_mem.scan_host();
+        mem.o_mem.last_scan_large2 = n_moves;
     }
-    n_moves = mem.s_mem.scan_host();
     vtx_vt moves = Kokkos::subview(vtx2, std::make_pair(static_cast<ordinal_t>(0), n_moves));
 
     return moves;
@@ -592,7 +599,8 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
     Kokkos::parallel_scan("filter potentially viable moves", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order1(x);
@@ -623,6 +631,7 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
 }
 
 // stream-compacts order2 for the vertices adjacent to any changed vertex
+// assumes a large percentage of all vertices are moved
 vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
@@ -692,7 +701,8 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order2(x);
@@ -722,6 +732,8 @@ vtx_vt find_affected(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     return vtx1;
 }
 
+// stream-compacts order2 for the vertices adjacent to any changed vertex
+// assumes a smaller percentage of vertices are moved than find_affected
 vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
@@ -770,7 +782,8 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     Kokkos::parallel_scan("collect vtx to be updated", policy_t(0, g.numRows()), KOKKOS_LAMBDA(const ordinal_t x, ordinal_t& update, const bool final){
         if(final && x == big_begin){
             pin_host() = update;
-        } else if(final && x == biggest_begin){
+        }
+        if(final && x == biggest_begin){
             pin_host2() = update;
         }
         ordinal_t i = order2(x);
@@ -1067,8 +1080,41 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
     wgt_vt pvals = mem.p_mem.pvals;
-    Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = swaps(t.league_rank());
+    ordinal_t biggest_begin = mem.o_mem.last_scan_large2;
+    vtx_vt big_rows = Kokkos::subview(swaps, std::make_pair((ordinal_t)0, biggest_begin));
+    vtx_vt biggest_rows = Kokkos::subview(swaps, std::make_pair(biggest_begin, total_moves));
+    Kokkos::parallel_for("update small (subtract)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big_rows(t.league_rank());
+        ordinal_t p = part(i);
+        //subtract i's contribution to p connectivity for adjacent vertices
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
+            ordinal_t v = g.graph.entries(j);
+            scalar_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            if(p == part(v)){
+                Kokkos::atomic_add(&pvals(v), -wgt);
+                return;
+            }
+            edge_offset_t v_start = cdata.conn_offsets(v);
+            ordinal_t v_size = cdata.conn_table_sizes(v);
+            ordinal_t p_o = hash(p) % static_cast<uint32_t>(v_size);
+            //v is always adjacent to p because it is adjacent to i which is in p
+            while(cdata.conn_entries(v_start + p_o) != p){
+                p_o++;
+                p_o = (p_o == v_size) ? 0 : p_o;
+            }
+            //DO NOT USE ATOMIC_ADD_FETCH HERE IT IS WAY SLOWER
+            scalar_t x = Kokkos::atomic_fetch_add(&cdata.conn_vals(v_start + p_o), -wgt);
+            //parts have locked locations if v_size == k (even when not originally allocated to size k)
+            if(x == wgt){
+                //free this gain slot
+                cdata.conn_entries(v_start + p_o) = HASH_RECLAIM;
+            }
+        });
+    });
+    Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = biggest_rows(t.league_rank());
         ordinal_t p = part(i);
         //subtract i's contribution to p connectivity for adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
@@ -1145,8 +1191,67 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
         cdata.conn_vals(offset + p_o) = old_val;
     });
 
-    Kokkos::parallel_for("update small (add)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = swaps(t.league_rank());
+    Kokkos::parallel_for("update small (add)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big_rows(t.league_rank());
+        //part contains new part at this point
+        ordinal_t best = part(i);
+        //add i's contribution to best connectivity for adjacent vertices
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
+            ordinal_t v = g.graph.entries(j);
+            scalar_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            dest_part(v) = NULL_PART;
+            if(best == part(v)){
+                Kokkos::atomic_add(&pvals(v), wgt);
+                return;
+            }
+            edge_offset_t v_start = cdata.conn_offsets(v);
+            ordinal_t v_size = cdata.conn_table_sizes(v);
+            ordinal_t p_o = hash(best) % static_cast<uint32_t>(v_size);
+            bool success = false;
+            //check if best in conn table
+            //can only determine best is absent if NULL_PART is found or v_size reached
+            for(ordinal_t q = 0; q < v_size; q++){
+                ordinal_t p_i = (p_o + q) % v_size;
+                ordinal_t px = cdata.conn_entries(v_start + p_i);
+                if(px == best){
+                    success = true;
+                    p_o = p_i;
+                    break;
+                } else if(px == NULL_PART){
+                    break;
+                }
+            }
+            //insert best into conn table
+            //needs to find either HASH_RECLAIM or NULL_PART to make insertion
+            while(!success){
+                ordinal_t px = cdata.conn_entries(v_start + p_o);
+                while(px != best && px > NULL_PART){
+                    p_o++;
+                    p_o = (p_o == v_size) ? 0 : p_o;
+                    px = cdata.conn_entries(v_start + p_o);
+                }
+                if(px == best){
+                    success = true;
+                } else {
+                    ordinal_t orig = NULL_PART;
+                    if(cdata.conn_entries(v_start + p_o) == HASH_RECLAIM) orig = HASH_RECLAIM;
+                    //don't care if this thread succeeds if another thread succeeds with the same value
+                    Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), orig, best);
+                    if(cdata.conn_entries(v_start + p_o) == best){
+                        success = true;
+                    } else {
+                        p_o++;
+                        p_o = (p_o == v_size) ? 0 : p_o;
+                    }
+                }
+            }
+            Kokkos::atomic_add(&cdata.conn_vals(v_start + p_o), wgt);
+        });
+    });
+    Kokkos::parallel_for("update small (add)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = biggest_rows(t.league_rank());
         //part contains new part at this point
         ordinal_t best = part(i);
         //add i's contribution to best connectivity for adjacent vertices
@@ -1217,7 +1322,6 @@ scalar_t pval_sum(wgt_vt pvals, ordinal_t n){
 }
 
 //perform swaps, update gains, and compute change to cut and imbalance
-//4 kernels, 1 device-host syncs
 template <bool uniform>
 void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cdata, mem_t& mem, refine_data& curr_state, float filter_ratio){
     const wgt_vt& vtx_w = wg.vtx_w;
@@ -1336,8 +1440,9 @@ void clone_pval(mem_t& mem, ordinal_t n){
     Kokkos::deep_copy(exec_space(), pval_clone_subview, pval_subview);
 }
 
+// moves vertices between clusters such that the objective increases
 template <bool constrained>
-void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1374,6 +1479,9 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
         if(moves.extent(0) == 0) break;
         if(wg.edge_uniform) moves = afterburner_filter<true>(moves, wg, part, curr_state, mem);
         else moves = afterburner_filter<false>(moves, wg, part, curr_state, mem);
+        // if all candidates have negative gain, it is possible that none are selected by the afterburner
+        // in this case, progress may be possible with a different filter ratio, but significant progress from this state is unlikely
+        if(moves.extent(0) == 0) break;
         if(iter_count > 1 || !is_initial) set_new_cluster_ids<constrained>(moves, part, curr_state, mem, constraint);
         if(wg.edge_uniform) perform_moves<true>(wg, part, moves, cdata, mem, curr_state, next_ratio);
         else perform_moves<false>(wg, part, moves, cdata, mem, curr_state, next_ratio);
@@ -1454,8 +1562,8 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
 }
 
     // explicit template instantiations
-    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
+    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
 
     template void local_move_strict<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
     template void local_move_strict<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);

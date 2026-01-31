@@ -56,11 +56,14 @@ namespace clustering_methods {
         } else Kokkos::deep_copy(part, input);
         while(true) {
             wg_t c = levels[levels.size() - 1];
-            // std::cout << "num coarse vertices: " << c.mtx.numRows() << "; edges: " << c.mtx.nnz() << std::endl;
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+            lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part, true);
+            if(c.mtx.nnz() > 100000 && old_obj == rfd.obj){
+                // it is usually worth trying this first
+                lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part, false);
+            }
             if(old_obj == rfd.obj){
                 lm_t::local_move_strict<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
             }
@@ -70,13 +73,23 @@ namespace clustering_methods {
             }
             vtx_vt louv = part;
             int coarse_vtx_count = 0;
+#ifdef EXTRA_TIMING
+            Kokkos::fence();
+            Kokkos::Timer lr_time;
+#endif
             vtx_vt coarse_map;
             if(levels.size() == 1 && c.edge_uniform) coarse_map = lr_t::template coarsen_leidenR<true, true>(c, louv, mem, rfd, coarse_vtx_count);
             else if(levels.size() == 1 && !(c.edge_uniform)) coarse_map = lr_t::template coarsen_leidenR<true, false>(c, louv, mem, rfd, coarse_vtx_count);
             else coarse_map = lr_t::template coarsen_leidenR<false, false>(c, louv, mem, rfd, coarse_vtx_count);
             parts.push_back(coarse_map);
+#ifdef EXTRA_TIMING
+            Kokkos::fence();
+            experiment.addMeasurement(Measurement::LeidenRefine, lr_time.seconds());
+#endif
             if(coarse_vtx_count < c.mtx.numRows()){
+#ifdef EXTRA_TIMING
                 Kokkos::Timer t;
+#endif
                 wg_t next_level;
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
@@ -85,9 +98,12 @@ namespace clustering_methods {
 
                 part = vtx_vt("cluster assignments coarse", coarse_vtx_count);
                 downsample(louv, part, coarse_map);
-
                 levels.push_back(next_level);
+
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 aggregate += t.seconds();
+#endif
             } else {
                 // avoid creating new graph if leidenR didn't contract any vertices
                 // which may happen with astronomically low probability for any input clustering
@@ -96,10 +112,7 @@ namespace clustering_methods {
             }
         }
 
-        // std::cout << "Aggregation time: " << aggregate << "s" << std::endl;
         experiment.addMeasurement(Measurement::Contract, aggregate);
-        // std::cout << rfd.obj << std::endl;
-        // std::cout << rfd.label_count << std::endl;
         int64_t t_nnz = 0;
         for(const wg_t& level : levels){
             t_nnz += level.mtx.nnz();
@@ -115,7 +128,7 @@ namespace clustering_methods {
             });
             if constexpr(plus){
                 order::generate_orderings(mem, c.mtx);
-                lm_t::local_move<false>(c, fine_part, rfd, false, mem, part);
+                lm_t::local_move<false>(c, fine_part, rfd, false, mem, part, true);
             }
         }
         return parts[0];
@@ -131,21 +144,23 @@ namespace clustering_methods {
         bool drop_constraint = constrained;
         while(true) {
             wg_t c = levels[levels.size() - 1];
-            // std::cout << "Pre-refine" << std::endl;
             vtx_vt part("cluster assignments", c.mtx.numRows());
             Kokkos::parallel_for("set initial assignments", policy_t(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
                 part(x) = x;
             });
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint);
+            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint, true);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
                 lm_t::local_move_strict<constrained>(c, part, rfd, true, mem, constraint);
             }
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 Kokkos::Timer t;
+#endif
                 wg_t next_level;
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
@@ -160,7 +175,10 @@ namespace clustering_methods {
                     constraint = next_constraint;
                 }
 
+#ifdef EXTRA_TIMING
+                Kokkos::fence();
                 aggregate += t.seconds();
+#endif
             } else if(drop_constraint) {
                 Kokkos::deep_copy(constraint, 0);
                 parts.pop_back();
@@ -177,7 +195,6 @@ namespace clustering_methods {
         experiment.setTotalNnz(t_nnz);
         experiment.setLevelCount(levels.size());
 
-        // std::cout << "Post coarsen obj: " << rfd.obj << std::endl;
         if(levels.size() > 1){
             // last level has the same partition as previous level
             // so refining this level on the uncoarsening pass
@@ -195,11 +212,10 @@ namespace clustering_methods {
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, false, mem, constraint);
+            lm_t::local_move<false>(c, part, rfd, false, mem, constraint, true);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);
-        // std::cout << "Post uncoarsen obj: " << rfd.obj << std::endl;
         return parts[0];
     }
 
