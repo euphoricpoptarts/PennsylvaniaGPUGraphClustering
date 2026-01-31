@@ -992,8 +992,41 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
     const matrix_t& g = wg.mtx;
     ordinal_t total_moves = swaps.extent(0);
     wgt_vt pvals = mem.p_mem.pvals;
-    Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = swaps(t.league_rank());
+    ordinal_t biggest_begin = mem.o_mem.last_scan_large2;
+    vtx_vt big_rows = Kokkos::subview(swaps, std::make_pair((ordinal_t)0, biggest_begin));
+    vtx_vt biggest_rows = Kokkos::subview(swaps, std::make_pair(biggest_begin, total_moves));
+    Kokkos::parallel_for("update small (subtract)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big_rows(t.league_rank());
+        ordinal_t p = part(i);
+        //subtract i's contribution to p connectivity for adjacent vertices
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
+            ordinal_t v = g.graph.entries(j);
+            scalar_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            if(p == part(v)){
+                Kokkos::atomic_add(&pvals(v), -wgt);
+                return;
+            }
+            edge_offset_t v_start = cdata.conn_offsets(v);
+            ordinal_t v_size = cdata.conn_table_sizes(v);
+            ordinal_t p_o = hash(p) % static_cast<uint32_t>(v_size);
+            //v is always adjacent to p because it is adjacent to i which is in p
+            while(cdata.conn_entries(v_start + p_o) != p){
+                p_o++;
+                p_o = (p_o == v_size) ? 0 : p_o;
+            }
+            //DO NOT USE ATOMIC_ADD_FETCH HERE IT IS WAY SLOWER
+            scalar_t x = Kokkos::atomic_fetch_add(&cdata.conn_vals(v_start + p_o), -wgt);
+            //parts have locked locations if v_size == k (even when not originally allocated to size k)
+            if(x == wgt){
+                //free this gain slot
+                cdata.conn_entries(v_start + p_o) = HASH_RECLAIM;
+            }
+        });
+    });
+    Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = biggest_rows(t.league_rank());
         ordinal_t p = part(i);
         //subtract i's contribution to p connectivity for adjacent vertices
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
@@ -1070,8 +1103,67 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
         cdata.conn_vals(offset + p_o) = old_val;
     });
 
-    Kokkos::parallel_for("update small (add)", team_policy_t(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
-        ordinal_t i = swaps(t.league_rank());
+    Kokkos::parallel_for("update small (add)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = big_rows(t.league_rank());
+        //part contains new part at this point
+        ordinal_t best = part(i);
+        //add i's contribution to best connectivity for adjacent vertices
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i + 1)), [=] (const edge_offset_t j){
+            ordinal_t v = g.graph.entries(j);
+            scalar_t wgt;
+            if constexpr(uniform) wgt = 1;
+            else wgt = g.values(j);
+            dest_part(v) = NULL_PART;
+            if(best == part(v)){
+                Kokkos::atomic_add(&pvals(v), wgt);
+                return;
+            }
+            edge_offset_t v_start = cdata.conn_offsets(v);
+            ordinal_t v_size = cdata.conn_table_sizes(v);
+            ordinal_t p_o = hash(best) % static_cast<uint32_t>(v_size);
+            bool success = false;
+            //check if best in conn table
+            //can only determine best is absent if NULL_PART is found or v_size reached
+            for(ordinal_t q = 0; q < v_size; q++){
+                ordinal_t p_i = (p_o + q) % v_size;
+                ordinal_t px = cdata.conn_entries(v_start + p_i);
+                if(px == best){
+                    success = true;
+                    p_o = p_i;
+                    break;
+                } else if(px == NULL_PART){
+                    break;
+                }
+            }
+            //insert best into conn table
+            //needs to find either HASH_RECLAIM or NULL_PART to make insertion
+            while(!success){
+                ordinal_t px = cdata.conn_entries(v_start + p_o);
+                while(px != best && px > NULL_PART){
+                    p_o++;
+                    p_o = (p_o == v_size) ? 0 : p_o;
+                    px = cdata.conn_entries(v_start + p_o);
+                }
+                if(px == best){
+                    success = true;
+                } else {
+                    ordinal_t orig = NULL_PART;
+                    if(cdata.conn_entries(v_start + p_o) == HASH_RECLAIM) orig = HASH_RECLAIM;
+                    //don't care if this thread succeeds if another thread succeeds with the same value
+                    Kokkos::atomic_compare_exchange(&cdata.conn_entries(v_start + p_o), orig, best);
+                    if(cdata.conn_entries(v_start + p_o) == best){
+                        success = true;
+                    } else {
+                        p_o++;
+                        p_o = (p_o == v_size) ? 0 : p_o;
+                    }
+                }
+            }
+            Kokkos::atomic_add(&cdata.conn_vals(v_start + p_o), wgt);
+        });
+    });
+    Kokkos::parallel_for("update small (add)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+        ordinal_t i = biggest_rows(t.league_rank());
         //part contains new part at this point
         ordinal_t best = part(i);
         //add i's contribution to best connectivity for adjacent vertices
