@@ -4,9 +4,8 @@ namespace jet_community {
 
 namespace ordering {
     // define internal types
-    using exec_space = typename matrix_t::execution_space;
-    using vtx_vt = Kokkos::View<ordinal_t*, exec_space>;
     using policy_t = Kokkos::RangePolicy<exec_space>;
+    using vtx_cvt = Kokkos::View<const ordinal_t*, exec_space>;
 
 // all this stuff is adapted from the kokkos wiki
 struct wrapper {
@@ -73,16 +72,16 @@ struct ScanMyArray {
     typedef wrapper value_type;
 
     private:
-    matrix_t g;
+    vtx_cvt row_map;
     vtx_vt order1, order2;
     wrapper offsets;
 
     public:
-    ScanMyArray(matrix_t _g,
+    ScanMyArray(vtx_cvt _row_map,
         vtx_vt _order1,
         vtx_vt _order2,
         wrapper _offsets) : 
-        g(_g),
+        row_map(_row_map),
         order1(_order1),
         order2(_order2),
         offsets(_offsets) {}
@@ -100,7 +99,7 @@ struct ScanMyArray {
 
     KOKKOS_INLINE_FUNCTION
     void operator()(const ordinal_t i, wrapper& update, const bool final) const {
-        ordinal_t degree = g.graph.row_map(i + 1) - g.graph.row_map(i);
+        ordinal_t degree = row_map(i + 1) - row_map(i);
         if(degree < LARGE_CUTOFF){
             if(final) order1(offsets.value[0] + update.value[0]) = i;
             update.value[0]++;
@@ -158,7 +157,41 @@ void generate_orderings(mem_t& mem, const matrix_t& g) {
     mem.o_mem.offset_mid = offsets.value[3];
     mem.o_mem.offset_large2 = offsets.value[4];
     mem.o_mem.offset_mid2 = offsets.value[4];
-    Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(g, order1, order2, offsets));
+    Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(g.graph.row_map, order1, order2, offsets));
+}
+
+void generate_orderings(mem_t& mem, const vtx_vt& row_map, const ordinal_t n) {
+    vtx_vt order1 = mem.o_mem.order1;
+    vtx_vt order2 = mem.o_mem.order2;
+    wrapper bucket_sizes;
+    typedef SumMyArray<Kokkos::HostSpace> ArraySumResult;
+
+    Kokkos::parallel_reduce("sum bucket sizes", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i, wrapper& update) {
+        ordinal_t degree = row_map(i + 1) - row_map(i);
+        if(degree < LARGE_CUTOFF){
+            update.value[0]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            update.value[1]++;
+        } else {
+            update.value[4]++;
+        }
+        if(degree < MID_CUTOFF){
+            update.value[2]++;
+        } else if(degree < MASSIVE_CUTOFF){
+            update.value[3]++;
+        }
+    }, ArraySumResult(bucket_sizes));
+    wrapper offsets(bucket_sizes);
+    offsets.value[0] = 0;
+    offsets.value[1] = bucket_sizes.value[0];
+    offsets.value[2] = 0;
+    offsets.value[3] = bucket_sizes.value[2];
+    offsets.value[4] = bucket_sizes.value[0] + bucket_sizes.value[1];
+    mem.o_mem.offset_large = offsets.value[1];
+    mem.o_mem.offset_mid = offsets.value[3];
+    mem.o_mem.offset_large2 = offsets.value[4];
+    mem.o_mem.offset_mid2 = offsets.value[4];
+    Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(row_map, order1, order2, offsets));
 }
 
 }
