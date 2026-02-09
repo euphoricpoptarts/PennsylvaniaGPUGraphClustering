@@ -96,16 +96,19 @@ struct countingFunctor {
 
     matrix_t g;
     vtx_view_t vcmap;
+    vtx_view_t total_members;
     edge_view_t degree_initial;
     wgt_view_t pvals;
     ordinal_t workLength;
 
     countingFunctor(matrix_t _g,
             vtx_view_t _vcmap,
+            vtx_view_t _total_members,
             edge_view_t _degree_initial,
             wgt_view_t _pvals) :
         g(_g),
         vcmap(_vcmap),
+        total_members(_total_members),
         degree_initial(_degree_initial),
         pvals(_pvals),
         workLength(_g.numRows()) {}
@@ -125,6 +128,7 @@ struct countingFunctor {
         // deduplication a bit better
         if constexpr(pval_clone_valid) nonLoopEdgesTotal -= pvals(i);
         Kokkos::atomic_add(&degree_initial(u), nonLoopEdgesTotal);
+        Kokkos::atomic_add(&total_members(u), 1);
     }
 };
 
@@ -136,6 +140,7 @@ struct combineAndDedupe {
     wgt_view_t hvals;
     edge_view_t hrow_map;
     edge_view_t counts;
+    vtx_view_t membership;
     vtx_view_t vtx;
 
     combineAndDedupe(matrix_t _g,
@@ -144,6 +149,7 @@ struct combineAndDedupe {
             wgt_view_t _hvals,
             edge_view_t _hrow_map,
             edge_view_t _counts,
+            vtx_view_t _membership,
             vtx_view_t _vtx) :
             g(_g),
             vcmap(_vcmap),
@@ -151,6 +157,7 @@ struct combineAndDedupe {
             hvals(_hvals),
             hrow_map(_hrow_map),
             counts(_counts),
+            membership(_membership),
             vtx(_vtx) {}
 
     // uses linear probing to resolve hash conflicts
@@ -175,19 +182,21 @@ struct combineAndDedupe {
     KOKKOS_INLINE_FUNCTION
         void operator()(const member& thread) const
     {
-        const ordinal_t x = vtx(thread.league_rank());
-        const ordinal_t i = vcmap(x);
-        const edge_offset_t start = g.graph.row_map(x);
-        const edge_offset_t end = g.graph.row_map(x + 1);
+        const ordinal_t i = thread.league_rank();
         const edge_offset_t hash_start = hrow_map(i);
         const edge_offset_t size = hrow_map(i + 1) - hash_start;
-        Kokkos::parallel_for(Kokkos::TeamThreadRange(thread, start, end), [&](const edge_offset_t j){
-            ordinal_t u = vcmap(g.graph.entries(j));
-            if(i == u) return;
-            edge_offset_t offset = insert(hash_start, size, u, i);
-            if constexpr(uniform) Kokkos::atomic_add(&hvals(hash_start + offset), 1);
-            else Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
-        });
+        for(ordinal_t xx = membership(i); xx < membership(i+1); xx++){
+            const ordinal_t x = vtx(xx);
+            const edge_offset_t start = g.graph.row_map(x);
+            const edge_offset_t end = g.graph.row_map(x + 1);
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(thread, start, end), [&](const edge_offset_t j){
+                ordinal_t u = vcmap(g.graph.entries(j));
+                if(i == u) return;
+                edge_offset_t offset = insert(hash_start, size, u, i);
+                if constexpr(uniform) Kokkos::atomic_add(&hvals(hash_start + offset), 1);
+                else Kokkos::atomic_add(&hvals(hash_start + offset), g.values(j));
+            });
+        }
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -246,9 +255,24 @@ wg_t build_coarse_graph(const wg_t curr_level,
     // determine upper bound on coarse vertex sizes
     edge_view_t hrow_map = Kokkos::subview(mem.p_mem.row_map, std::make_pair((ordinal_t)0, nc + 1));
     wgt_view_t pvals_clone = mem.p_mem.pvals_clone;
+    vtx_view_t membership_offsets = Kokkos::subview(mem.s_mem.vtx1, std::make_pair((ordinal_t)0, nc + 1));
+    Kokkos::deep_copy(exec_space(), membership_offsets, 0);
     Kokkos::deep_copy(exec_space(), hrow_map, 0);
-    countingFunctor<pval_clone_valid> countF(g, vcmap, hrow_map, pvals_clone);
+    countingFunctor<pval_clone_valid> countF(g, vcmap, membership_offsets, hrow_map, pvals_clone);
     Kokkos::parallel_for("count edges per coarse vertex (also compute coarse vertex weights)", policy_t(0, n), countF);
+    Kokkos::parallel_scan("scan membership", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, ordinal_t& update, const bool final){
+        ordinal_t val = membership_offsets(i);
+        if(final) membership_offsets(i) = update;
+        update += val;
+    });
+    vtx_view_t vtcs = Kokkos::subview(mem.s_mem.vtx2, std::make_pair((ordinal_t)0, n));
+    vtx_view_t counts = Kokkos::subview(mem.s_mem.zeros1, std::make_pair((ordinal_t)0, nc));
+    Kokkos::parallel_for("add", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+        ordinal_t c = vcmap(i);
+        ordinal_t insert = Kokkos::atomic_fetch_add(&counts(c), 1) + membership_offsets(c);
+        vtcs(insert) = i;
+    });
+    Kokkos::deep_copy(exec_space(), counts, 0);
 
     // allocate hash tables for each coarse vertex
     edge_offset_t hash_size = 0;
@@ -269,19 +293,19 @@ wg_t build_coarse_graph(const wg_t curr_level,
 
     // accumulates edge totals per coarse vertex
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    ordinal_t small = mem.o_mem.offset_mid;
-    ordinal_t large = mem.o_mem.offset_mid2 - small;
-    ordinal_t largest = n - mem.o_mem.offset_mid2;
-    vtx_view_t vtx_small = Kokkos::subview(mem.o_mem.order2, std::make_pair(static_cast<ordinal_t>(0), small));
-    vtx_view_t vtx_large = Kokkos::subview(mem.o_mem.order2, std::make_pair(small, mem.o_mem.offset_mid2));
-    vtx_view_t vtx_largest = Kokkos::subview(mem.o_mem.order2, std::make_pair(mem.o_mem.offset_mid2, n));
+    // ordinal_t small = mem.o_mem.offset_mid;
+    // ordinal_t large = mem.o_mem.offset_mid2 - small;
+    // ordinal_t largest = n - mem.o_mem.offset_mid2;
+    // vtx_view_t vtx_small = Kokkos::subview(mem.o_mem.order2, std::make_pair(static_cast<ordinal_t>(0), small));
+    // vtx_view_t vtx_large = Kokkos::subview(mem.o_mem.order2, std::make_pair(small, mem.o_mem.offset_mid2));
+    // vtx_view_t vtx_largest = Kokkos::subview(mem.o_mem.order2, std::make_pair(mem.o_mem.offset_mid2, n));
     // identifies unique coarse edges
-    combineAndDedupe<uniform> cnd_small(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_small);
-    combineAndDedupe<uniform> cnd_large(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_large);
-    combineAndDedupe<uniform> cnd_largest(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_largest);
-    Kokkos::parallel_for("deduplicate", team_policy_t(large, Kokkos::AUTO), cnd_large);
-    Kokkos::parallel_for("deduplicate", team_policy_t(largest, 1024), cnd_largest);
-    Kokkos::parallel_for("deduplicate", policy_t(0, small), cnd_small);
+    combineAndDedupe<uniform> cnd_small(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, membership_offsets, vtcs);
+    // combineAndDedupe<uniform> cnd_large(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_large);
+    // combineAndDedupe<uniform> cnd_largest(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_largest);
+    Kokkos::parallel_for("deduplicate", team_policy_t(nc, Kokkos::AUTO), cnd_small);
+    // Kokkos::parallel_for("deduplicate", team_policy_t(largest, 1024), cnd_largest);
+    // Kokkos::parallel_for("deduplicate", policy_t(0, small), cnd_small);
     edge_offset_t old_size = hash_size;
     // build row map of coarse graph
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
