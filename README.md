@@ -83,7 +83,7 @@ Networkit Leiden is off the chart at a median delta of -0.427.
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ### Memetic Modularity Comparison
-![Comparison of our Memetic Clustering Algorithm vs VieClus](images/memetic_modularity_comparison-1.png)
+![Comparison of our Memetic Clustering Algorithm vs VieClus](images/boxplot_meme-1.png)
 Our memetic clustering algorithm is run for 1 minute on a B200 GPU, with a population size of 100.  
 VieClus is run on an AMD Epyc 9655 CPU with a time limit of 30 minutes, and 16-24 processes depending on memory usage.  
 As each VieClus process independently runs a Louvain-like clustering algorithm (among other tasks), the available system memory severely constrains the number of processes that may be used.  
