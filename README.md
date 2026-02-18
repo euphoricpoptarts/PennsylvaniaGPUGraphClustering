@@ -8,6 +8,13 @@ Our pLeiden and pLeiden+ implementations are the first to provide the Leiden alg
 
 ## Usage
 
+### Building
+
+Standard cmake build process.  
+Cmake version >=3.28 required.  
+Ensure your cmake can find kokkos and kokkos-kernels before attempting cmake configuration.  
+On Linux, you can help cmake do this by creating a file at `~/.cmake/packages/KokkosKernels/find.txt` that contains the full-path to your kokkos-kernels installation. Kokkos-kernels transitively informs cmake where to find kokkos.
+
 ### Executables
 
 #### Clustering Programs
@@ -67,12 +74,12 @@ Tests are ran on a set of 57 large graphs commonly used for comparison of graph 
 https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
 
 ### Runtime Comparison
-![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
+![Comparison of Clustering Runtimes](images/boxplot_time-1.png)
 pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
-![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
-Networkit Leiden is off the chart at -0.415.  
+![Comparison of Clustering Modularity](images/boxplot_mod-1.png)
+Networkit Leiden is off the chart at a median delta of -0.427.  
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ### Memetic Modularity Comparison
