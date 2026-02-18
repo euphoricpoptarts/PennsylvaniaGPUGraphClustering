@@ -1375,7 +1375,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     clone_pval(mem, g.numRows());
     int iter_count = 0;
     std::vector<float> filter_ratios = {0.75, 0.25};
-    std::vector<int> limits = {4, 2};
+    std::vector<int> limits = {8, 4};
     for(size_t x = 0; x < filter_ratios.size(); x++){
         float filter_ratio = enable_simulated_annealing ? filter_ratios[x] : 0;
         int limit = limits[x];
