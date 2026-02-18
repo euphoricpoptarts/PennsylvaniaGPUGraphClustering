@@ -1234,11 +1234,11 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
     });
 }
 
-scalar_t pval_sum(wgt_vt pvals, ordinal_t n){
+edge_offset_t pval_sum(wgt_vt pvals, ordinal_t n){
     // this works well for large vertex swap counts
     // perhaps the old approach could be useful for small vertex swap counts (specifically during the uncoarsening pass)
-    scalar_t sum = 0;
-    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i, scalar_t& gain_update){
+    edge_offset_t sum = 0;
+    Kokkos::parallel_reduce("count cutsize change part1", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t& i, edge_offset_t& gain_update){
         gain_update += pvals(i);
     }, sum);
     return sum;
@@ -1277,8 +1277,8 @@ void perform_moves(const wg_t& wg, vtx_vt part, const vtx_vt swaps, cdata_t& cda
         // cluster ids updated inside this function
         update_small<uniform>(wg, part, swaps, dest_part, cdata, mem);
     }
-    scalar_t curr_pval = pval_sum(pvals, wg.mtx.numRows());
-    scalar_t cut_change = curr_pval - curr_state.last_pval;
+    edge_offset_t curr_pval = pval_sum(pvals, wg.mtx.numRows());
+    edge_offset_t cut_change = curr_pval - curr_state.last_pval;
     curr_state.last_pval = curr_pval;
     curr_state.uncut += cut_change;
     curr_state.update_objective();
