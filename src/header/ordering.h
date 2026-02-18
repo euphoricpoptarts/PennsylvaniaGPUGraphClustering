@@ -11,8 +11,10 @@ namespace ordering {
     using mem_t = memory_store;
     using exec_space = typename matrix_t::execution_space;
     using vtx_vt = Kokkos::View<ordinal_t*, exec_space>;
-    // on the B200, I change MID_CUTOFF to 64 for best performance
-    constexpr ordinal_t MID_CUTOFF = 32;
+    // on the RTX 5090, I change MID_CUTOFF to 32 for best performance
+    // I found 64 to be better for the B200
+    // for other GPUs, you can experiment yourself
+    constexpr ordinal_t MID_CUTOFF = 64;
     constexpr ordinal_t LARGE_CUTOFF = 128;
     constexpr ordinal_t MASSIVE_CUTOFF = 15000;
 
