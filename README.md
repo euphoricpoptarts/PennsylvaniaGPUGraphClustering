@@ -75,7 +75,7 @@ https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
 
 ### Runtime Comparison
 ![Comparison of Clustering Runtimes](images/boxplot_time-1.png)
-pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
+pLouvain is up to 1060x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
 ![Comparison of Clustering Modularity](images/boxplot_mod-1.png)
