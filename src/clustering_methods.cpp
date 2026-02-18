@@ -212,7 +212,7 @@ namespace clustering_methods {
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, false, mem, constraint, true);
+            // lm_t::local_move<false>(c, part, rfd, false, mem, constraint, true);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);
