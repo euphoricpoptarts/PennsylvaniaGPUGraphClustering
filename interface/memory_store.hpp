@@ -11,6 +11,7 @@ struct memory_store {
 
     // define internal types
     using Device = typename matrix_t::device_type;
+    using exec_space = typename matrix_t::execution_space;
     using ordinal_t = typename matrix_t::ordinal_type;
     using edge_offset_t = typename matrix_t::size_type;
     using scalar_t = typename matrix_t::value_type;
@@ -78,12 +79,35 @@ struct memory_store {
     scratch s_mem;
     ordering o_mem;
     cluster_data spare_cluster_data;
+    exec_space s1, s2;
+    cudaEvent_t e0, e1, e2;
+
+    void wait_default(){
+        cudaEventRecord(e0, exec_space().cuda_stream());
+        cudaStreamWaitEvent(s1.cuda_stream(), e0, 0);
+        cudaStreamWaitEvent(s2.cuda_stream(), e0, 0);
+    }
+
+    void align_streams(){
+        cudaStream_t s0 = exec_space().cuda_stream();
+        cudaEventRecord(e1, s1.cuda_stream());
+        cudaEventRecord(e2, s2.cuda_stream());
+        cudaStreamWaitEvent(s0, e1, 0);
+        cudaStreamWaitEvent(s0, e2, 0);
+    }
 
     memory_store(const matrix_t largest, cluster_data& clone_target) :
         p_mem(largest),
         s_mem(largest.numRows()),
         o_mem(largest.numRows()),
-        spare_cluster_data(clone_target) {}
+        spare_cluster_data(clone_target) {
+            auto [s1c, s2c] = Kokkos::Experimental::partition_space(exec_space(),1,1);
+            s1 = s1c;
+            s2 = s2c;
+            cudaEventCreate(&e0);
+            cudaEventCreate(&e1);
+            cudaEventCreate(&e2);
+        }
 
     memory_store(const memory_store&) = delete;
 };

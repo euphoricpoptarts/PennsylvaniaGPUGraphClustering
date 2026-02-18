@@ -47,6 +47,7 @@
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/system/cuda/execution_policy.h>
 
 
 
@@ -280,8 +281,9 @@ wg_t build_coarse_graph(const wg_t curr_level,
     combineAndDedupe<uniform> cnd_large(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_large);
     combineAndDedupe<uniform> cnd_largest(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_largest);
     Kokkos::parallel_for("deduplicate", team_policy_t(large, Kokkos::AUTO), cnd_large);
-    Kokkos::parallel_for("deduplicate", team_policy_t(largest, 1024), cnd_largest);
-    Kokkos::parallel_for("deduplicate", policy_t(0, small), cnd_small);
+    Kokkos::parallel_for("deduplicate", team_policy_t(mem.s1, largest, 1024), cnd_largest);
+    Kokkos::parallel_for("deduplicate", policy_t(mem.s2, 0, small), cnd_small);
+    mem.align_streams();
     edge_offset_t old_size = hash_size;
     // build row map of coarse graph
     Kokkos::parallel_scan("scan offsets", policy_t(0, nc + 1), KOKKOS_LAMBDA(const ordinal_t i, edge_offset_t& update, const bool final){
@@ -299,9 +301,9 @@ wg_t build_coarse_graph(const wg_t curr_level,
     // this allows storing offsets directly into entries_coarse, even if edge_offset_t is a larger type
     vtx_view_t entries_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse entries"), hash_size);
     wgt_view_t wgts_coarse(Kokkos::ViewAllocateWithoutInitializing("coarse weights"), hash_size);
-    Kokkos::fence();
     edge_offset_t stream_compact_start = 0;
     edge_offset_t coarse_start = 0;
+    cudaStream_t s0 = exec_space().cuda_stream();
     while(stream_compact_start < old_size) {
         ordinal_t* htb = htable.data() + stream_compact_start;
         ordinal_t width = std::numeric_limits<ordinal_t>::max();
@@ -309,7 +311,7 @@ wg_t build_coarse_graph(const wg_t curr_level,
         thrust::counting_iterator<ordinal_t> iter(0);
         ordinal_t* ec = entries_coarse.data() + coarse_start;
         ordinal_t* ec_end;
-        if(!is_host_space) ec_end = thrust::copy_if(thrust::device, iter, iter + width, htb, ec, is_nonnegative());
+        if(!is_host_space) ec_end = thrust::copy_if(thrust::cuda::par_nosync.on(s0), iter, iter + width, htb, ec, is_nonnegative());
         else ec_end = thrust::copy_if(thrust::host, iter, iter + width, htb, ec, is_nonnegative());
         ordinal_t compacted_width = ec_end - ec;
         Kokkos::parallel_for("read", policy_t(0, compacted_width), KOKKOS_LAMBDA(const ordinal_t dst_base){

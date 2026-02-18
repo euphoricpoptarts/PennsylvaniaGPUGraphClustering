@@ -387,8 +387,9 @@ vtx_vt afterburner_filter(vtx_vt candidates, const wg_t& wg, const vtx_vt& part,
     afterburner_kernel<uniform> afterburner_large(large_vtx, wg, part, mem, rfd);
     afterburner_kernel<uniform> afterburner_largest(largest_vtx, wg, part, mem, rfd);
     Kokkos::parallel_for("afterburner heuristic (small vtx)", policy_t(0, small), afterburner_small);
-    Kokkos::parallel_for("afterburner heuristic (large vtx)", team_policy_t(big, Kokkos::AUTO), afterburner_large);
-    Kokkos::parallel_for("afterburner heuristic (largest vtx)", team_policy_t(biggest, 1024), afterburner_largest);
+    Kokkos::parallel_for("afterburner heuristic (large vtx)", team_policy_t(mem.s1, big, Kokkos::AUTO), afterburner_large);
+    Kokkos::parallel_for("afterburner heuristic (largest vtx)", team_policy_t(mem.s2, biggest, 1024), afterburner_largest);
+    mem.align_streams();
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     vtx_pin_st pin_host2 = mem.s_mem.pin_host2;
     //scan all vertices that passed the post filter
@@ -583,9 +584,11 @@ vtx_vt candidates_and_destinations(const wg_t& wg, const matrix_t& c_graph, cons
         select_destinations<uniform, constrained> select_small(small_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
         select_destinations<uniform, constrained> select_large(large_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
         select_destinations<uniform, constrained> select_largest(largest_vtx, wg, c_graph, part, constraint, mem, rfd, filter_ratio, false);
+        mem.wait_default();
         Kokkos::parallel_for("argmax destination part (small vtx)", policy_t(0, big_begin), select_small);
-        Kokkos::parallel_for("argmax destination part (large vtx)", team_policy_t(biggest_begin - big_begin, Kokkos::AUTO), select_large);
-        Kokkos::parallel_for("argmax destination part (largest vtx)", team_policy_t(n - biggest_begin, 1024), select_largest);
+        Kokkos::parallel_for("argmax destination part (large vtx)", team_policy_t(mem.s1, biggest_begin - big_begin, Kokkos::AUTO), select_large);
+        Kokkos::parallel_for("argmax destination part (largest vtx)", team_policy_t(mem.s2, n - biggest_begin, 1024), select_largest);
+        mem.align_streams();
     }
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     vtx_pin_st pin_host2 = mem.s_mem.pin_host2;
@@ -982,8 +985,9 @@ void update_large(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, cdata_t
     update_cdata<uniform, false, true> big_update(big_rows, g, part, cdata, pvals, max_size);
     update_cdata<uniform, false, false> biggest_update(biggest_rows, g, part, cdata, pvals, max_size);
     Kokkos::parallel_for("update large (big rows)", team_policy_t(big, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(max_size*sizeof(scalar_t) + max_size*sizeof(ordinal_t))), big_update);
-    Kokkos::parallel_for("update large (biggest rows)", team_policy_t(biggest, 1024), biggest_update);
-    Kokkos::parallel_for("update large (small rows)", policy_t(0, small), small_update);
+    Kokkos::parallel_for("update large (biggest rows)", team_policy_t(mem.s1, biggest, 1024), biggest_update);
+    Kokkos::parallel_for("update large (small rows)", policy_t(mem.s2, 0, small), small_update);
+    mem.align_streams();
 }
 
 //update datastructures assuming a "small" number of vertices are moved
@@ -1308,9 +1312,11 @@ void init_conn_graph(const wg_t& wg, const vtx_vt& part, cdata_t& cdata, mem_t& 
     update_cdata<uniform, true, false> small_update(small_rows, g, part, cdata, pvals, max_size);
     update_cdata<uniform, true, true> big_update(big_rows, g, part, cdata, pvals, max_size);
     update_cdata<uniform, true, false> biggest_update(biggest_rows, g, part, cdata, pvals, max_size);
+    mem.wait_default();
     Kokkos::parallel_for("init conn (big rows)", team_policy_t(mem.o_mem.offset_mid2 - mem.o_mem.offset_mid, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(max_size*sizeof(scalar_t) + max_size*sizeof(ordinal_t))), big_update);
-    Kokkos::parallel_for("init conn (biggest rows)", team_policy_t(n - mem.o_mem.offset_mid2, 1024), biggest_update);
-    Kokkos::parallel_for("init conn (small rows)", policy_t(0, mem.o_mem.offset_mid), small_update);
+    Kokkos::parallel_for("init conn (biggest rows)", team_policy_t(mem.s1, n - mem.o_mem.offset_mid2, 1024), biggest_update);
+    Kokkos::parallel_for("init conn (small rows)", policy_t(mem.s2, 0, mem.o_mem.offset_mid), small_update);
+    mem.align_streams();
 }
 
 //initializes datastructures
