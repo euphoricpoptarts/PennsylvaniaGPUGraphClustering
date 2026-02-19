@@ -1,9 +1,9 @@
-# Graph Clustering Algorithms for the GPU
+# Pennsylvania GPU Graph Clustering (PGGC)
 
 Depends on Kokkos (https://github.com/kokkos/kokkos) (version >= 4.7.0 recommended), KokkosKernels (https://github.com/kokkos/kokkos-kernels) (version >= 4.7.0 recommended), and the Cuda Toolkit (version >12.0).  
 Your Kokkos install must be Cuda-enabled.
 
-This is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
+PGGC is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
 Our pLeiden and pLeiden+ implementations are the first to provide the Leiden algorithm's six original guarantees in a parallel setting.
 
 ## Usage
