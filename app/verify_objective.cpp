@@ -1,3 +1,7 @@
+// Portions of this file are derived from the Jet: Multilevel Graph Partitioning project.
+// Original license and copyright notices are retained below.
+//
+// SPDX-License-Identifier: Apache-2.0
 // ***********************************************************************
 // 
 // Jet: Multilevel Graph Partitioning
