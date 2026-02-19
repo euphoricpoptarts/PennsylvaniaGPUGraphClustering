@@ -1,3 +1,5 @@
+# Copyright 2026 Mike Gilbert
+# SPDX-License-Identifier: Apache-2.0
 cmake_minimum_required(VERSION 3.28)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)

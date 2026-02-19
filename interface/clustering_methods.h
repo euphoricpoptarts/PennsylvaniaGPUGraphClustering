@@ -1,3 +1,5 @@
+// Copyright 2026 Mike Gilbert
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "memory_store.hpp"
 #include "cluster_data.hpp"
