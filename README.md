@@ -1,12 +1,19 @@
-# Graph Clustering Algorithms for the GPU
+# Pennsylvania GPU Graph Clustering (PGGC)
 
 Depends on Kokkos (https://github.com/kokkos/kokkos) (version >= 4.7.0 recommended), KokkosKernels (https://github.com/kokkos/kokkos-kernels) (version >= 4.7.0 recommended), and the Cuda Toolkit (version >12.0).  
 Your Kokkos install must be Cuda-enabled.
 
-This is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
+PGGC is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
 Our pLeiden and pLeiden+ implementations are the first to provide the Leiden algorithm's six original guarantees in a parallel setting.
 
 ## Usage
+
+### Building
+
+Standard cmake build process.  
+Cmake version >=3.28 required.  
+Ensure your cmake can find kokkos and kokkos-kernels before attempting cmake configuration.  
+On Linux, you can help cmake do this by creating a file at `~/.cmake/packages/KokkosKernels/find.txt` that contains the full-path to your kokkos-kernels installation. Kokkos-kernels transitively informs cmake where to find kokkos.
 
 ### Executables
 
@@ -63,20 +70,19 @@ Cugraph Leiden: https://github.com/rapidsai/cugraph
 GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
 CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
 
-Tests are ran on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
+Tests are run on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
 https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
 
 ### Runtime Comparison
-![Comparison of Clustering Runtimes](images/runtime_comparison-1.png)
-pLouvain is up to 1200x faster than Cugraph Louvain for some graphs.
+![Comparison of Clustering Runtimes](images/boxplot_time-1.png)
+pLouvain is up to 1060x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
-![Comparison of Clustering Modularity](images/modularity_comparison-1.png)
-Networkit Leiden is off the chart at -0.415.  
+![Comparison of Clustering Modularity](images/boxplot_mod-1.png)
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ### Memetic Modularity Comparison
-![Comparison of our Memetic Clustering Algorithm vs VieClus](images/memetic_modularity_comparison-1.png)
+![Comparison of our Memetic Clustering Algorithm vs VieClus](images/boxplot_meme-1.png)
 Our memetic clustering algorithm is run for 1 minute on a B200 GPU, with a population size of 100.  
 VieClus is run on an AMD Epyc 9655 CPU with a time limit of 30 minutes, and 16-24 processes depending on memory usage.  
 As each VieClus process independently runs a Louvain-like clustering algorithm (among other tasks), the available system memory severely constrains the number of processes that may be used.  

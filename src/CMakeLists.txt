@@ -1,3 +1,5 @@
+# Copyright 2026 Mike Gilbert
+# SPDX-License-Identifier: Apache-2.0
 add_library(cluster OBJECT)
 target_sources(cluster PRIVATE
     leidenR.cpp
