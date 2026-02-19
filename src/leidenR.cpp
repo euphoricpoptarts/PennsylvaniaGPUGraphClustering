@@ -1,3 +1,5 @@
+// Copyright 2026 Mike Gilbert
+// SPDX-License-Identifier: Apache-2.0
 #include <limits>
 #include <random>
 #include <Kokkos_Core.hpp>

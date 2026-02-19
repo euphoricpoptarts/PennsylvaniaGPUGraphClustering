@@ -1,3 +1,5 @@
+// Copyright 2026 Mike Gilbert
+// SPDX-License-Identifier: Apache-2.0
 #include "header/local_mover.h"
 #include "header/contract.h"
 #include "header/leidenR.h"
