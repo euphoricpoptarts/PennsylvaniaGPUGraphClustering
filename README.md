@@ -70,7 +70,7 @@ Cugraph Leiden: https://github.com/rapidsai/cugraph
 GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
 CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
 
-Tests are ran on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
+Tests are run on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
 https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
 
 ### Runtime Comparison
