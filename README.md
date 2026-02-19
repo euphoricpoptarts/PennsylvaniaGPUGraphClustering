@@ -79,7 +79,6 @@ pLouvain is up to 1060x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
 ![Comparison of Clustering Modularity](images/boxplot_mod-1.png)
-Networkit Leiden is off the chart at a median delta of -0.427.  
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ### Memetic Modularity Comparison
