@@ -1,9 +1,9 @@
-# Graph Clustering Algorithms for the GPU
+# Pennsylvania GPU Graph Clustering (PGGC)
 
 Depends on Kokkos (https://github.com/kokkos/kokkos) (version >= 4.7.0 recommended), KokkosKernels (https://github.com/kokkos/kokkos-kernels) (version >= 4.7.0 recommended), and the Cuda Toolkit (version >12.0).  
 Your Kokkos install must be Cuda-enabled.
 
-This is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
+PGGC is a parallel undirected graph clustering package that implements novel GPU-centric formulations of the Louvain and Leiden clustering algorithms.  
 Our pLeiden and pLeiden+ implementations are the first to provide the Leiden algorithm's six original guarantees in a parallel setting.
 
 ## Usage
@@ -70,7 +70,7 @@ Cugraph Leiden: https://github.com/rapidsai/cugraph
 GPU programs (pLouvain, pLeiden, pLeiden+, v-Louvain, GALA, cugraph Louvain/Leiden) are run on an Nvidia B200 GPU.  
 CPU programs (GVE-Louvain/Leiden, Networkit Louvain/Leiden) are run on an AMD Ryzen 9950x3D CPU.
 
-Tests are ran on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
+Tests are run on a set of 57 large graphs commonly used for comparison of graph clustering and partitioning methods.  
 https://scholarsphere.psu.edu/resources/cc9dcf42-f5eb-42f1-80ec-5d50a402fc22
 
 ### Runtime Comparison
@@ -79,7 +79,6 @@ pLouvain is up to 1060x faster than Cugraph Louvain for some graphs.
 
 ### Modularity Comparison
 ![Comparison of Clustering Modularity](images/boxplot_mod-1.png)
-Networkit Leiden is off the chart at a median delta of -0.427.  
 pLouvain and pLeiden+ achieve higher quality than each state-of-the-art competitor nearly universally.
 
 ### Memetic Modularity Comparison

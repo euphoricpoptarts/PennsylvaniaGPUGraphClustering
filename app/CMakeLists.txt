@@ -1,3 +1,5 @@
+# Copyright 2026 Mike Gilbert
+# SPDX-License-Identifier: Apache-2.0
 add_executable(plouvain cluster_main.cpp)
 add_executable(pleiden cluster_main.cpp)
 add_executable(pleiden+ cluster_main.cpp)
