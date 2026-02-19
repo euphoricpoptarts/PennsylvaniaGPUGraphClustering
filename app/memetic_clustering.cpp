@@ -1,3 +1,5 @@
+// Copyright 2026 Mike Gilbert
+// SPDX-License-Identifier: Apache-2.0
 #include "core_types.h"
 #include "io/header/io.h"
 #include "io/header/parse_args.h"

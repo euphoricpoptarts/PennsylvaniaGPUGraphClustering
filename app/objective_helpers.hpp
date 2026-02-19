@@ -1,3 +1,5 @@
+// Copyright 2026 Mike Gilbert
+// SPDX-License-Identifier: Apache-2.0
 #include "io/header/parse_args.h"
 #include "weighted_graph.h"
 #include "cluster_data.hpp"
