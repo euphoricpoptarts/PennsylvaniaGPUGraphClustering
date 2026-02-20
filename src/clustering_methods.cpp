@@ -152,7 +152,7 @@ namespace clustering_methods {
             });
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint, true);
+            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint, false);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
                 lm_t::local_move_strict<constrained>(c, part, rfd, true, mem, constraint);
@@ -214,7 +214,7 @@ namespace clustering_methods {
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, false, mem, constraint, true);
+            lm_t::local_move<false>(c, part, rfd, false, mem, constraint, false);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);
