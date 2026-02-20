@@ -1,4 +1,4 @@
-// Copyright 2026 Mike Gilbert
+// Copyright 2026 Michael S. Gilbert II
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "core_types.h"
