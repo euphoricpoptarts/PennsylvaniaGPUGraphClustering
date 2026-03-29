@@ -758,6 +758,7 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
     vtx_vt big_rows = Kokkos::subview(swaps, std::make_pair(big_begin, biggest_begin));
     vtx_vt biggest_rows = Kokkos::subview(swaps, std::make_pair(biggest_begin, total_moves));
     vtx_vt small_rows = Kokkos::subview(swaps, std::make_pair(static_cast<ordinal_t>(0), big_begin));
+    mem.wait_default();
     Kokkos::parallel_for("mark adjacent", policy_t(0, big_begin), KOKKOS_LAMBDA(const ordinal_t x){
         ordinal_t i = small_rows(x);
         for(edge_offset_t j = g.graph.row_map(i); j < g.graph.row_map(i+1); j++){
@@ -765,20 +766,21 @@ vtx_vt find_affected_smaller(const wg_t& wg, const vtx_vt swaps, mem_t& mem){
             swap_bit(v) = 1;
         }
     });
-    Kokkos::parallel_for("mark adjacent", team_policy_t(biggest_begin - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("mark adjacent", team_policy_t(mem.s1, biggest_begin - big_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big_rows(t.league_rank());
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [=](const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
             swap_bit(v) = 1;
         });
     });
-    Kokkos::parallel_for("mark adjacent", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("mark adjacent", team_policy_t(mem.s2, total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = biggest_rows(t.league_rank());
         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.graph.row_map(i), g.graph.row_map(i+1)), [=](const edge_offset_t j){
             ordinal_t v = g.graph.entries(j);
             swap_bit(v) = 1;
         });
     });
+    mem.align_streams();
 
     vtx_pin_st pin_host = mem.s_mem.pin_host;
     vtx_pin_st pin_host2 = mem.s_mem.pin_host2;
@@ -1004,6 +1006,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
     ordinal_t biggest_begin = mem.o_mem.last_scan_large2;
     vtx_vt big_rows = Kokkos::subview(swaps, std::make_pair((ordinal_t)0, biggest_begin));
     vtx_vt biggest_rows = Kokkos::subview(swaps, std::make_pair(biggest_begin, total_moves));
+    mem.wait_default();
     Kokkos::parallel_for("update small (subtract)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big_rows(t.league_rank());
         ordinal_t p = part(i);
@@ -1034,7 +1037,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
             }
         });
     });
-    Kokkos::parallel_for("update small (subtract)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("update small (subtract)", team_policy_t(mem.s1, total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = biggest_rows(t.league_rank());
         ordinal_t p = part(i);
         //subtract i's contribution to p connectivity for adjacent vertices
@@ -1064,6 +1067,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
             }
         });
     });
+    mem.align_streams();
 
     // remove the new cluster id from hashmap, and insert old cluster id into hashmap
     Kokkos::parallel_for("swap pval and bval", policy_t(0, total_moves), KOKKOS_LAMBDA(const ordinal_t x){
@@ -1112,6 +1116,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
         cdata.conn_vals(offset + p_o) = old_val;
     });
 
+    mem.wait_default();
     Kokkos::parallel_for("update small (add)", team_policy_t(biggest_begin, Kokkos::AUTO), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = big_rows(t.league_rank());
         //part contains new part at this point
@@ -1171,7 +1176,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
             Kokkos::atomic_add(&cdata.conn_vals(v_start + p_o), wgt);
         });
     });
-    Kokkos::parallel_for("update small (add)", team_policy_t(total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
+    Kokkos::parallel_for("update small (add)", team_policy_t(mem.s1, total_moves - biggest_begin, 1024), KOKKOS_LAMBDA(const member& t){
         ordinal_t i = biggest_rows(t.league_rank());
         //part contains new part at this point
         ordinal_t best = part(i);
@@ -1230,6 +1235,7 @@ void update_small(const wg_t& wg, const vtx_vt part, const vtx_vt swaps, const v
             Kokkos::atomic_add(&cdata.conn_vals(v_start + p_o), wgt);
         });
     });
+    mem.align_streams();
 }
 
 edge_offset_t pval_sum(wgt_vt pvals, ordinal_t n){
