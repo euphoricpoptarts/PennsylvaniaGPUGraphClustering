@@ -33,7 +33,6 @@ struct memory_store {
         obj_vt obj_persistent;
         wgt_vt pvals, pvals_clone;
         vtx_vt part, dest_part;
-        vtx_vt dest_cache;
 
         persistent(const matrix_t largest){
             ordinal_t n = largest.numRows();

@@ -19,10 +19,10 @@ namespace local_move_heuristic {
     using wg_t = weighted_graph;
 
     template <bool constrained>
-    void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
+    void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
 
     template <bool constrained>
-    void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint);
 
 }
 

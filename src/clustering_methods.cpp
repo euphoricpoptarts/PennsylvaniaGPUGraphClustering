@@ -61,13 +61,13 @@ namespace clustering_methods {
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part, true);
+            lm_t::local_move<false>(c, part, rfd, mem, part, true);
             if(c.mtx.nnz() > 100000 && old_obj == rfd.obj){
                 // it is usually worth trying this first
-                lm_t::local_move<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part, false);
+                lm_t::local_move<false>(c, part, rfd, mem, part, false);
             }
             if(old_obj == rfd.obj){
-                lm_t::local_move_strict<false>(c, part, rfd, !improve && (levels.size() == 1), mem, part);
+                lm_t::local_move_strict<false>(c, part, rfd, mem, part);
             }
             if(rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
@@ -130,7 +130,7 @@ namespace clustering_methods {
             });
             if constexpr(plus){
                 order::generate_orderings(mem, c.mtx);
-                lm_t::local_move<false>(c, fine_part, rfd, false, mem, part, true);
+                lm_t::local_move<false>(c, fine_part, rfd, mem, part, true);
             }
         }
         return parts[0];
@@ -152,11 +152,12 @@ namespace clustering_methods {
             });
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<constrained>(c, part, rfd, true, mem, constraint, true);
+            lm_t::local_move<constrained>(c, part, rfd, mem, constraint, true);
             // the user clearly cares about quality if they are doing multiple iterations
             if(constrained && rfd.label_count == c.mtx.numRows()){
-                lm_t::local_move_strict<constrained>(c, part, rfd, true, mem, constraint);
+                lm_t::local_move_strict<constrained>(c, part, rfd, mem, constraint);
             }
+            // this logic (when part is appended to vector) should be reworked
             parts.push_back(part);
             if(rfd.label_count < c.mtx.numRows()){
 #ifdef EXTRA_TIMING
@@ -183,6 +184,7 @@ namespace clustering_methods {
 #endif
             } else if(drop_constraint) {
                 Kokkos::deep_copy(constraint, 0);
+                // this logic should be reworked
                 parts.pop_back();
                 drop_constraint = false;
             } else {
@@ -214,7 +216,7 @@ namespace clustering_methods {
                 part(x) = coarse_part(part(x));
             });
             order::generate_orderings(mem, c.mtx);
-            lm_t::local_move<false>(c, part, rfd, false, mem, constraint, true);
+            lm_t::local_move<false>(c, part, rfd, mem, constraint, true);
         }
 
         experiment.addMeasurement(Measurement::Contract, aggregate);

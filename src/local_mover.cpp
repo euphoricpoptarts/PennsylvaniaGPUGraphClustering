@@ -1371,7 +1371,7 @@ void clone_pval(mem_t& mem, ordinal_t n){
 
 // moves vertices between clusters such that the objective increases
 template <bool constrained>
-void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
+void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1379,6 +1379,9 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
+    // enable certain optimizations when the clustering consists only of singleton clusters
+    // this further requires that each vertex v is in cluster v (which should always be the case in this software for singleton clusterings)
+    bool is_initial = (best_state.label_count == g.numRows());
     if(!is_initial){
         if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
         else init_conn_graph<false>(wg, part, cdata, mem);
@@ -1432,7 +1435,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool i
 // with some exceptions due to floating-point roundoff
 // this occurs specifically if a vertex is close to node-optimal, having a near-zero objective delta to a neighboring cluster 
 template <bool constrained>
-void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint){
+void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint){
     const matrix_t g = wg.mtx;
     // this is a reference to avoid allocating new memory
     refine_data& curr_state = mem.spare_cluster_data;
@@ -1440,6 +1443,9 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     vtx_vt part = Kokkos::subview(mem.p_mem.part, std::make_pair(static_cast<ordinal_t>(0), g.numRows()));
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
+    // enable certain optimizations when the clustering consists only of singleton clusters
+    // this further requires that each vertex v is in cluster v (which should always be the case in this software for singleton clusterings)
+    bool is_initial = (best_state.label_count == g.numRows());
     if(!is_initial){
         if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
         else init_conn_graph<false>(wg, part, cdata, mem);
@@ -1495,11 +1501,11 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
 }
 
     // explicit template instantiations
-    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
-    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
+    template void local_move<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
+    template void local_move<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint, bool enable_simulated_annealing);
 
-    template void local_move_strict<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
-    template void local_move_strict<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, bool is_initial, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<true>(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint);
+    template void local_move_strict<false>(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t& mem, vtx_vt constraint);
 
 }
 
