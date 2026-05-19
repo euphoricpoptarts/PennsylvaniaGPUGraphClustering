@@ -275,19 +275,14 @@ wg_t build_coarse_graph(const wg_t curr_level,
 
     // accumulates edge totals per coarse vertex
     edge_view_t coarse_row_map_f("edges_per_source", nc + 1);
-    ordinal_t small = mem.o_mem.offset_mid;
-    ordinal_t large = mem.o_mem.offset_mid2 - small;
-    ordinal_t largest = n - mem.o_mem.offset_mid2;
-    vtx_view_t vtx_small = Kokkos::subview(mem.o_mem.order2, std::make_pair(static_cast<ordinal_t>(0), small));
-    vtx_view_t vtx_large = Kokkos::subview(mem.o_mem.order2, std::make_pair(small, mem.o_mem.offset_mid2));
-    vtx_view_t vtx_largest = Kokkos::subview(mem.o_mem.order2, std::make_pair(mem.o_mem.offset_mid2, n));
+    auto [vtx_small, vtx_large, vtx_largest] = mem.o_mem.split_order2();
     // identifies unique coarse edges
     combineAndDedupe<uniform> cnd_small(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_small);
     combineAndDedupe<uniform> cnd_large(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_large);
     combineAndDedupe<uniform> cnd_largest(g, vcmap, htable, hvals, hrow_map, coarse_row_map_f, vtx_largest);
-    Kokkos::parallel_for("deduplicate", team_policy_t(large, Kokkos::AUTO), cnd_large);
-    Kokkos::parallel_for("deduplicate", team_policy_t(mem.s1, largest, 1024), cnd_largest);
-    Kokkos::parallel_for("deduplicate", policy_t(mem.s2, 0, small), cnd_small);
+    Kokkos::parallel_for("deduplicate", team_policy_t(vtx_large.extent(0), Kokkos::AUTO), cnd_large);
+    Kokkos::parallel_for("deduplicate", team_policy_t(mem.s1, vtx_largest.extent(0), 1024), cnd_largest);
+    Kokkos::parallel_for("deduplicate", policy_t(mem.s2, 0, vtx_small.extent(0)), cnd_small);
     mem.align_streams();
     edge_offset_t old_size = hash_size;
     // build row map of coarse graph

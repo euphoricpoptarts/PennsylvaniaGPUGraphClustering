@@ -160,6 +160,7 @@ void generate_orderings(mem_t& mem, const matrix_t& g) {
     mem.o_mem.offset_mid = offsets.value[3];
     mem.o_mem.offset_large2 = offsets.value[4];
     mem.o_mem.offset_mid2 = offsets.value[4];
+    mem.o_mem.total = n;
     Kokkos::parallel_scan("generate orders", policy_t(0, n), ScanMyArray(g, order1, order2, offsets));
 }
 

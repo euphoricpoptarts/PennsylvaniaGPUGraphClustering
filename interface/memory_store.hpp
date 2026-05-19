@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <type_traits>
+#include <tuple>
 #include <Kokkos_Core.hpp>
 #include "KokkosSparse_CrsMatrix.hpp"
 #include "cluster_data.hpp"
@@ -52,10 +53,41 @@ struct memory_store {
         vtx_vt order1, order2;
         ordinal_t last_scan_mid, last_scan_mid2, last_scan_large, last_scan_large2;
         ordinal_t offset_mid, offset_mid2, offset_large, offset_large2;
+        ordinal_t total;
 
         ordering(const ordinal_t n){
             order1 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 1"), n);
             order2 = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("vtx ordering 2"), n);
+        }
+
+        std::tuple<vtx_vt, vtx_vt, vtx_vt> split_order1() const {
+            vtx_vt small_vtx = Kokkos::subview(order1, std::make_pair(static_cast<ordinal_t>(0), offset_large));
+            vtx_vt large_vtx = Kokkos::subview(order1, std::make_pair(offset_large, offset_large2));
+            vtx_vt largest_vtx = Kokkos::subview(order1, std::make_pair(offset_large2, total));
+            return {small_vtx, large_vtx, largest_vtx};
+        }
+
+        std::tuple<vtx_vt, vtx_vt, vtx_vt> split_order1_compacted(vtx_vt input) const {
+            ordinal_t x = input.extent(0);
+            vtx_vt small_vtx = Kokkos::subview(input, std::make_pair(static_cast<ordinal_t>(0), last_scan_large));
+            vtx_vt large_vtx = Kokkos::subview(input, std::make_pair(last_scan_large, last_scan_large2));
+            vtx_vt largest_vtx = Kokkos::subview(input, std::make_pair(last_scan_large2, x));
+            return {small_vtx, large_vtx, largest_vtx};
+        }
+
+        std::tuple<vtx_vt, vtx_vt, vtx_vt> split_order2() const {
+            vtx_vt small_vtx = Kokkos::subview(order2, std::make_pair(static_cast<ordinal_t>(0), offset_mid));
+            vtx_vt large_vtx = Kokkos::subview(order2, std::make_pair(offset_mid, offset_mid2));
+            vtx_vt largest_vtx = Kokkos::subview(order2, std::make_pair(offset_mid2, total));
+            return {small_vtx, large_vtx, largest_vtx};
+        }
+
+        std::tuple<vtx_vt, vtx_vt, vtx_vt> split_order2_compacted(vtx_vt input) const {
+            ordinal_t x = input.extent(0);
+            vtx_vt small_vtx = Kokkos::subview(input, std::make_pair(static_cast<ordinal_t>(0), last_scan_mid));
+            vtx_vt large_vtx = Kokkos::subview(input, std::make_pair(last_scan_mid, last_scan_mid2));
+            vtx_vt largest_vtx = Kokkos::subview(input, std::make_pair(last_scan_mid2, x));
+            return {small_vtx, large_vtx, largest_vtx};
         }
     };
 
