@@ -1352,7 +1352,7 @@ void local_move(const wg_t wg, vtx_vt best_part, refine_data& best_state, mem_t&
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     // enable certain optimizations when the clustering consists only of singleton clusters
-    // this further requires that each vertex v is in cluster v (which should always be the case in this software for singleton clusterings)
+    // this further requires that each vertex v is in cluster v (which takes some effort to ensure for Leiden)
     bool is_initial = (best_state.label_count == g.numRows());
     if(!is_initial){
         if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
@@ -1416,12 +1416,11 @@ void local_move_strict(const wg_t wg, vtx_vt best_part, refine_data& best_state,
     Kokkos::deep_copy(exec_space(), part, best_part);
     cdata_t cdata = truncate_and_init_mem(mem, wg, best_state.label_count, best_state.top_nnz == g.nnz());
     // enable certain optimizations when the clustering consists only of singleton clusters
-    // this further requires that each vertex v is in cluster v (which should always be the case in this software for singleton clusterings)
+    // this further requires that each vertex v is in cluster v (which takes some effort to ensure for Leiden)
     bool is_initial = (best_state.label_count == g.numRows());
     if(!is_initial){
         if(wg.edge_uniform) init_conn_graph<true>(wg, part, cdata, mem);
         else init_conn_graph<false>(wg, part, cdata, mem);
-        clone_pval(mem, g.numRows());
         curr_state.last_pval = pval_sum(mem.p_mem.pvals, g.numRows());
     } else {
         curr_state.last_pval = 0;

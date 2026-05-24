@@ -44,20 +44,35 @@ namespace clustering_methods {
         });
     }
 
+    void upsample(vtx_vt in, vtx_vt out, ordinal_t n){
+        Kokkos::parallel_for("upsample cluster assignments", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t x){
+            out(x) = in(out(x));
+        });
+    }
+
+    void set_singleton(vtx_vt part, ordinal_t n){
+        Kokkos::parallel_for("set as singleton clustering", policy_t(0, n), KOKKOS_LAMBDA(const ordinal_t i){
+            part(i) = i;
+        });
+    }
+
     template <bool plus, bool improve>
     vtx_vt leiden_part(mem_t& mem, wg_t top, rfd_t& rfd, ExperimentLoggerUtil<value_t>& experiment, vtx_vt input){
         std::vector<wg_t> levels;
         std::vector<vtx_vt> parts;
         levels.push_back(top);
         double aggregate = 0;
-        vtx_vt part("cluster assignments", top.mtx.numRows());
-        if(!improve){
-            Kokkos::parallel_for("set initial assignments", policy_t(0, top.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-                part(x) = x;
-            });
-        } else Kokkos::deep_copy(part, input);
+        vtx_vt part(Kokkos::ViewAllocateWithoutInitializing("cluster assignments"), top.mtx.numRows());
+        if(improve) Kokkos::deep_copy(part, input);
         while(true) {
             wg_t c = levels[levels.size() - 1];
+            if(rfd.label_count == c.mtx.numRows()){
+                // ensure that any singleton clustering has each vertex v assigned to cluster v
+                set_singleton(part, rfd.label_count);
+                wgt_vt td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
+                // ensure that the cluster weights are correct
+                Kokkos::deep_copy(td_rfd, c.vtx_w);
+            }
             double old_obj = rfd.obj;
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
@@ -69,7 +84,8 @@ namespace clustering_methods {
             if(old_obj == rfd.obj){
                 lm_t::local_move_strict<false>(c, part, rfd, mem, part);
             }
-            if(rfd.label_count == c.mtx.numRows()){
+            // every vertex in a singleton cluster and no improvements possible
+            if(old_obj == rfd.obj && rfd.label_count == c.mtx.numRows()){
                 parts.push_back(part);
                 break;
             }
@@ -95,10 +111,11 @@ namespace clustering_methods {
                 wg_t next_level;
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, false>(c, coarse_map, coarse_vtx_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, coarse_map, coarse_vtx_count, mem);
+                // this must be zero-initialized
                 next_level.vtx_w = wgt_vt("weighted degree 2", coarse_vtx_count);
                 coarsen_vtx_w(c.vtx_w, next_level.vtx_w, coarse_map);
 
-                part = vtx_vt("cluster assignments coarse", coarse_vtx_count);
+                part = vtx_vt(Kokkos::ViewAllocateWithoutInitializing("cluster assignments coarse"), coarse_vtx_count);
                 downsample(louv, part, coarse_map);
                 levels.push_back(next_level);
 
@@ -125,9 +142,7 @@ namespace clustering_methods {
             wg_t c = levels[i];
             vtx_vt coarse_part = parts[i + 1];
             vtx_vt fine_part = parts[i];
-            Kokkos::parallel_for("update top level assignments", policy_t(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-                fine_part(x) = coarse_part(fine_part(x));
-            });
+            upsample(coarse_part, fine_part, c.mtx.numRows());
             if constexpr(plus){
                 order::generate_orderings(mem, c.mtx);
                 lm_t::local_move<false>(c, fine_part, rfd, mem, part, true);
@@ -146,10 +161,8 @@ namespace clustering_methods {
         bool drop_constraint = constrained;
         while(true) {
             wg_t c = levels[levels.size() - 1];
-            vtx_vt part("cluster assignments", c.mtx.numRows());
-            Kokkos::parallel_for("set initial assignments", policy_t(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-                part(x) = x;
-            });
+            vtx_vt part(Kokkos::ViewAllocateWithoutInitializing("cluster assignments"), c.mtx.numRows());
+            set_singleton(part, c.mtx.numRows());
             // orderings must be generated for use in local_move and build_coarse_graph
             order::generate_orderings(mem, c.mtx);
             lm_t::local_move<constrained>(c, part, rfd, mem, constraint, true);
@@ -168,12 +181,12 @@ namespace clustering_methods {
                 if(c.edge_uniform) next_level = contract_t::build_coarse_graph<true, true>(c, part, rfd.label_count, mem);
                 else next_level = contract_t::build_coarse_graph<false, false>(c, part, rfd.label_count, mem);
                 wgt_vt td_rfd = Kokkos::subview(rfd.total_deg, std::make_pair((ordinal_t)0, rfd.label_count));
-                next_level.vtx_w = wgt_vt("next level vtx weights", rfd.label_count);
+                next_level.vtx_w = wgt_vt(Kokkos::ViewAllocateWithoutInitializing("next level vtx weights"), rfd.label_count);
                 Kokkos::deep_copy(next_level.vtx_w, td_rfd);
                 levels.push_back(next_level);
 
                 if(constrained) {
-                    vtx_vt next_constraint("next constraint", rfd.label_count);
+                    vtx_vt next_constraint(Kokkos::ViewAllocateWithoutInitializing("next constraint"), rfd.label_count);
                     downsample(constraint, next_constraint, part);
                     constraint = next_constraint;
                 }
@@ -212,9 +225,7 @@ namespace clustering_methods {
             wg_t c = levels[i];
             vtx_vt coarse_part = parts[i + 1];
             vtx_vt part = parts[i];
-            Kokkos::parallel_for("update top level assignments", policy_t(0, c.mtx.numRows()), KOKKOS_LAMBDA(const ordinal_t x){
-                part(x) = coarse_part(part(x));
-            });
+            upsample(coarse_part, part, c.mtx.numRows());
             order::generate_orderings(mem, c.mtx);
             lm_t::local_move<false>(c, part, rfd, mem, constraint, true);
         }
